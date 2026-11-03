@@ -20,8 +20,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Test collector (dry run)
+      - name: Save verified pregame predictions
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python collect_predictions.py
+        run: python collect_predictions.py --write
+
