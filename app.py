@@ -26,9 +26,20 @@ h1,h2,h3{color:#eaf6ff!important}
 @media(max-width:1100px){.ff-game{grid-template-columns:25px 62px minmax(100px,1fr) 62px 76px;}.ff-goalies,.ff-rel{grid-column:3/6}.ff-game img{width:24px;height:24px}}
 </style>'''
 st.markdown(CSS,unsafe_allow_html=True)
-logo=Path(__file__).parent/'assets'/'frozen_forecast_logo.svg'
+# Support either an assets/ folder or a logo at the repository root.
+app_dir = Path(__file__).resolve().parent
+logo_candidates = [
+    app_dir / 'assets' / 'frozen_forecast_logo.svg',
+    app_dir / 'frozen_forecast_logo.svg',
+]
+logo = next((candidate for candidate in logo_candidates if candidate.is_file()), None)
 left,right=st.columns([1,5],vertical_alignment='center')
-with left:st.image(str(logo),width=140)
+with left:
+ if logo is not None:
+  # Read the SVG contents rather than relying on Streamlit's media-file path.
+  st.image(logo.read_text(encoding='utf-8'),width=140)
+ else:
+  st.markdown('<div style="font-size:56px;text-align:center">🏒❄️</div>',unsafe_allow_html=True)
 with right:st.markdown('<div class="ff-hero"><div class="ff-sub">NHL ANALYTICS • PROJECTION CENTER</div><div class="ff-head">FROZEN <span>FORECAST</span></div><div class="ff-sub">THE NUMBERS BEHIND THE ICE</div></div>',unsafe_allow_html=True)
 now=datetime.now(ET)
 with st.sidebar:
