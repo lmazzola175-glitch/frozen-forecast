@@ -3,10 +3,22 @@ name: Frozen Forecast Collector
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 14 * * *"
+    - cron: "*/15 21-23 * * *"
+    - cron: "*/15 0-4 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frozen-forecast-collector
+  cancel-in-progress: false
 
 jobs:
   collect:
     runs-on: ubuntu-latest
+    timeout-minutes: 12
 
     steps:
       - name: Checkout repository
@@ -20,9 +32,18 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Save verified pregame predictions
+      - name: Save EARLY pregame predictions
+        if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 14 * * *'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python collect_predictions.py --mode final
+        run: python collect_predictions.py --mode early --write
+
+      - name: Save FINAL PREGAME predictions
+        if: github.event_name == 'workflow_dispatch' || github.event.schedule != '0 14 * * *'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python collect_predictions.py --mode final --write
+
 
