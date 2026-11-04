@@ -24,35 +24,77 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Test V2 projection engine
+      - name: Inspect NHL game-level statistics
         run: |
           python - <<'PY'
           from datetime import datetime
           from zoneinfo import ZoneInfo
-          from engine_v2 import build_projections
+          from engine import get_json, season_for, STATS
 
           today = datetime.now(
               ZoneInfo("America/New_York")
           ).date().isoformat()
 
-          df, meta = build_projections(today, verify=True)
+          season = season_for(today)
 
-          print("MODEL:", meta["model_version"])
+          print("=" * 60)
+          print("FROZEN FORECAST V2 — NHL API DIAGNOSTIC")
+          print("=" * 60)
+
           print("DATE:", today)
-          print("SCHEDULED:", meta["scheduled"])
-          print("PROJECTED:", meta["projected"])
-          print("RECENT TEAMS:", meta["recent_team_count"])
-          print("SKIPPED:", meta["skipped"])
+          print("SEASON:", season)
 
-          if not df.empty:
-              print(
-                  df[
-                      [
-                          "Away Code",
-                          "Home Code",
-                          "Projected Total",
-                          "Goalie Reliability",
-                      ]
-                  ].to_string(index=False)
-              )
+          params = {
+              "isAggregate": "false",
+              "isGame": "true",
+              "cayenneExp": (
+                  f"gameTypeId=2 and seasonId={season}"
+              ),
+              "limit": 10,
+          }
+
+          data = get_json(
+              f"{STATS}/team/summary",
+              params,
+          )
+
+          rows = data.get("data", [])
+
+          print("ROWS RETURNED:", len(rows))
+          print("TOTAL RECORDS:", data.get("total"))
+
+          if rows:
+              print("\nAVAILABLE FIELDS:")
+              print("-" * 60)
+
+              for key in sorted(rows[0]):
+                  print(f"{key}: {rows[0][key]}")
+
+              print("-" * 60)
+
+              required_fields = [
+                  "teamFullName",
+                  "gameDate",
+                  "gameId",
+                  "shotsFor",
+                  "shotsAgainst",
+                  "goalsFor",
+              ]
+
+              print("\nFIELD VALIDATION:")
+
+              for field in required_fields:
+                  status = (
+                      "FOUND"
+                      if field in rows[0]
+                      else "MISSING"
+                  )
+                  print(f"{field}: {status}")
+
+          else:
+              print("\nWARNING: No game-level rows returned.")
+              print("RESPONSE KEYS:", list(data.keys()))
+
+          print("\nDIAGNOSTIC COMPLETE")
           PY
+
