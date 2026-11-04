@@ -1,0 +1,58 @@
+
+name: Test Frozen Forecast V2
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-v2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Test V2 projection engine
+        run: |
+          python - <<'PY'
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          from engine_v2 import build_projections
+
+          today = datetime.now(
+              ZoneInfo("America/New_York")
+          ).date().isoformat()
+
+          df, meta = build_projections(today, verify=True)
+
+          print("MODEL:", meta["model_version"])
+          print("DATE:", today)
+          print("SCHEDULED:", meta["scheduled"])
+          print("PROJECTED:", meta["projected"])
+          print("RECENT TEAMS:", meta["recent_team_count"])
+          print("SKIPPED:", meta["skipped"])
+
+          if not df.empty:
+              print(
+                  df[
+                      [
+                          "Away Code",
+                          "Home Code",
+                          "Projected Total",
+                          "Goalie Reliability",
+                      ]
+                  ].to_string(index=False)
+              )
+          PY
