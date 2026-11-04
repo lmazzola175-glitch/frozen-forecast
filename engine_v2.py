@@ -1,10 +1,13 @@
 
-"""Frozen Forecast v2 — recent-form challenger projection engine.
+"""Frozen Forecast v2 — Recent Form Challenger Engine.
 
-Preserves the v1 shot-volume / goalie formula, but blends
-season-long team performance with recent five-game form.
+Model: v2_recent5_w20
 
-This is an experimental model, not a replacement for v1.
+Uses the original v1 goalie-adjusted projection formula,
+blending season team statistics with the previous five
+completed games at a maximum weight of 20%.
+
+Does not modify v1 or write predictions to Supabase.
 """
 
 import pandas as pd
@@ -13,6 +16,7 @@ from engine import (
     API,
     STATS,
     ET,
+    TEAM_CODES,
     get_json,
     norm,
     season_for,
@@ -29,54 +33,73 @@ MODEL_VERSION = "v2_recent5_w20"
 RECENT_GAMES = 5
 RECENT_WEIGHT = 0.20
 
+PAGE_SIZE = 100
 
-def fetch_recent_team_stats(season, through_date, games=5):
-    """Fetch completed regular-season game-level team stats.
 
-    Only games strictly before the target game date are eligible.
-    This prevents using target-day results in pregame projections.
+def fetch_recent_team_stats(season, through_date, games=RECENT_GAMES):
+    """Retrieve the previous N games for each NHL team.
+
+    Uses game-level statistics strictly before through_date.
+    Handles NHL API pagination.
     """
 
-    data = get_json(
-        f"{STATS}/team/summary",
-        {
-            "isAggregate": "false",
-            "isGame": "true",
-            "cayenneExp": (
-                f"gameTypeId=2 and seasonId={season}"
-            ),
-            "limit": -1,
-        },
-    ).get("data", [])
+    records = []
+    start = 0
+    total = None
 
-    if not data:
-        raise RuntimeError(
-            "No game-level NHL team statistics were returned."
+    while True:
+        response = get_json(
+            f"{STATS}/team/summary",
+            {
+                "isAggregate": "false",
+                "isGame": "true",
+                "cayenneExp": (
+                    f"gameTypeId=2 and seasonId={season}"
+                ),
+                "start": start,
+                "limit": PAGE_SIZE,
+            },
         )
 
-    records = []
+        rows = response.get("data", [])
 
-    for item in data:
-        team = item.get("teamFullName")
+        if total is None:
+            total = int(response.get("total") or 0)
 
-        from engine import TEAM_CODES
+        if not rows:
+            break
 
-        code = TEAM_CODES.get(team)
+        records.extend(rows)
+        start += len(rows)
+
+        if total and start >= total:
+            break
+
+        if len(rows) < PAGE_SIZE:
+            break
+
+    if not records:
+        raise RuntimeError(
+            "NHL API returned no game-level team statistics."
+        )
+
+    parsed = []
+
+    for item in records:
+        code = TEAM_CODES.get(item.get("teamFullName"))
 
         if not code:
             continue
 
-        date = str(
-            item.get("gameDate")
-            or item.get("date")
-            or ""
+        game_date = str(
+            item.get("gameDate") or ""
         )[:10]
 
-        if not date or date >= through_date:
+        if not game_date or game_date >= through_date:
             continue
 
-        shots_for = item.get("shotsFor")
-        shots_against = item.get("shotsAgainst")
+        shots_for = item.get("shotsForPerGame")
+        shots_against = item.get("shotsAgainstPerGame")
         goals_for = item.get("goalsFor")
 
         if (
@@ -86,35 +109,37 @@ def fetch_recent_team_stats(season, through_date, games=5):
         ):
             continue
 
-        records.append({
+        parsed.append({
             "team": code,
-            "date": date,
+            "date": game_date,
             "game_id": str(item.get("gameId") or ""),
             "shots_for": float(shots_for),
             "shots_against": float(shots_against),
             "goals_for": float(goals_for),
         })
 
-    if not records:
+    if not parsed:
         raise RuntimeError(
-            "No valid recent team-game statistics were returned."
+            "No valid completed team-game statistics "
+            "were available before the target date."
         )
 
-    df = pd.DataFrame(records)
+    df = pd.DataFrame(parsed)
+
+    df = df.drop_duplicates(
+        subset=["team", "game_id"]
+    )
 
     df = df.sort_values(
         ["team", "date", "game_id"],
         ascending=[True, False, False],
     )
 
-    df = df.drop_duplicates(
-        ["team", "game_id"]
+    df = (
+        df.groupby("team", group_keys=False)
+        .head(games)
+        .copy()
     )
-
-    df = df.groupby(
-        "team",
-        group_keys=False
-    ).head(games)
 
     recent = {}
 
@@ -125,33 +150,32 @@ def fetch_recent_team_stats(season, through_date, games=5):
             continue
 
         recent[code] = {
-            "sf": group["shots_for"].mean(),
-            "sa": group["shots_against"].mean(),
-            "shoot": (
+            "sf": float(group["shots_for"].mean()),
+            "sa": float(group["shots_against"].mean()),
+            "shoot": float(
                 group["goals_for"].sum() / total_shots
             ),
-            "games": len(group),
+            "games": int(len(group)),
         }
 
     return recent
 
 
 def blend_team_stats(season_stats, recent_stats):
-    """Blend season averages with recent performance."""
+    """Blend season averages with recent five-game form."""
 
     blended = {}
 
     for code, season in season_stats.items():
         recent = recent_stats.get(code)
 
-        if not recent:
+        if recent is None:
             blended[code] = season.copy()
             continue
 
-        # Reduce the weight if fewer than five games exist.
         weight = RECENT_WEIGHT * min(
             recent["games"] / RECENT_GAMES,
-            1.0
+            1.0,
         )
 
         blended[code] = {
@@ -173,7 +197,7 @@ def blend_team_stats(season_stats, recent_stats):
 
 
 def build_projections(date, verify=True):
-    """Return the same projection schema as engine.py."""
+    """Generate v2 projections using the v1 output schema."""
 
     games = fetch_schedule(date)
 
@@ -183,21 +207,22 @@ def build_projections(date, verify=True):
             "projected": 0,
             "rosters": {},
             "model_version": MODEL_VERSION,
+            "recent_team_count": 0,
         }
 
     season = season_for(date)
 
-    teams = fetch_team_stats(season)
+    season_teams = fetch_team_stats(season)
 
-    recent = fetch_recent_team_stats(
+    recent_teams = fetch_recent_team_stats(
         season,
         date,
         games=RECENT_GAMES,
     )
 
     teams = blend_team_stats(
-        teams,
-        recent,
+        season_teams,
+        recent_teams,
     )
 
     goalies = fetch_goalie_stats(season)
@@ -253,7 +278,8 @@ def build_projections(date, verify=True):
             or home not in starters
         ):
             skipped.append(
-                f"{away} @ {home}: missing team/starter data"
+                f"{away} @ {home}: "
+                "team or starter data unavailable"
             )
             continue
 
@@ -270,7 +296,8 @@ def build_projections(date, verify=True):
 
         if away_sv is None or home_sv is None:
             skipped.append(
-                f"{away} @ {home}: goalie stats missing"
+                f"{away} @ {home}: "
+                "goalie statistics missing"
             )
             continue
 
@@ -340,16 +367,17 @@ def build_projections(date, verify=True):
             "Calculated At UTC": now.isoformat(),
         })
 
-    projections = (
-        pd.DataFrame(rows)
-        .sort_values(
-            "Projected Total",
-            ascending=False
+    if rows:
+        projections = (
+            pd.DataFrame(rows)
+            .sort_values(
+                "Projected Total",
+                ascending=False,
+            )
+            .reset_index(drop=True)
         )
-        .reset_index(drop=True)
-        if rows
-        else pd.DataFrame()
-    )
+    else:
+        projections = pd.DataFrame()
 
     metadata = {
         "scheduled": len(games),
@@ -358,8 +386,9 @@ def build_projections(date, verify=True):
         "rosters": roster,
         "team_count": len(teams),
         "goalie_count": len(goalies),
-        "recent_team_count": len(recent),
+        "recent_team_count": len(recent_teams),
         "model_version": MODEL_VERSION,
     }
 
     return projections, metadata
+
