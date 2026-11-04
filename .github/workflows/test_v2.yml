@@ -1,100 +1,394 @@
 
-name: Test Frozen Forecast V2
+"""Frozen Forecast v2 — Recent Form Challenger Engine.
 
-on:
-  workflow_dispatch:
+Model: v2_recent5_w20
 
-permissions:
-  contents: read
+Uses the original v1 goalie-adjusted projection formula,
+blending season team statistics with the previous five
+completed games at a maximum weight of 20%.
 
-jobs:
-  test-v2:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+Does not modify v1 or write predictions to Supabase.
+"""
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+import pandas as pd
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+from engine import (
+    API,
+    STATS,
+    ET,
+    TEAM_CODES,
+    get_json,
+    norm,
+    season_for,
+    fetch_schedule,
+    fetch_team_stats,
+    fetch_goalie_stats,
+    fetch_starters,
+    verify_rosters,
+)
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
 
-      - name: Inspect NHL game-level statistics
-        run: |
-          python - <<'PY'
-          from datetime import datetime
-          from zoneinfo import ZoneInfo
-          from engine import get_json, season_for, STATS
+MODEL_VERSION = "v2_recent5_w20"
 
-          today = datetime.now(
-              ZoneInfo("America/New_York")
-          ).date().isoformat()
+RECENT_GAMES = 5
+RECENT_WEIGHT = 0.20
 
-          season = season_for(today)
+PAGE_SIZE = 100
 
-          print("=" * 60)
-          print("FROZEN FORECAST V2 — NHL API DIAGNOSTIC")
-          print("=" * 60)
 
-          print("DATE:", today)
-          print("SEASON:", season)
+def fetch_recent_team_stats(season, through_date, games=RECENT_GAMES):
+    """Retrieve the previous N games for each NHL team.
 
-          params = {
-              "isAggregate": "false",
-              "isGame": "true",
-              "cayenneExp": (
-                  f"gameTypeId=2 and seasonId={season}"
-              ),
-              "limit": 10,
-          }
+    Uses game-level statistics strictly before through_date.
+    Handles NHL API pagination.
+    """
 
-          data = get_json(
-              f"{STATS}/team/summary",
-              params,
-          )
+    records = []
+    start = 0
+    total = None
 
-          rows = data.get("data", [])
+    while True:
+        response = get_json(
+            f"{STATS}/team/summary",
+            {
+                "isAggregate": "false",
+                "isGame": "true",
+                "cayenneExp": (
+                    f"gameTypeId=2 and seasonId={season}"
+                ),
+                "start": start,
+                "limit": PAGE_SIZE,
+            },
+        )
 
-          print("ROWS RETURNED:", len(rows))
-          print("TOTAL RECORDS:", data.get("total"))
+        rows = response.get("data", [])
 
-          if rows:
-              print("\nAVAILABLE FIELDS:")
-              print("-" * 60)
+        if total is None:
+            total = int(response.get("total") or 0)
 
-              for key in sorted(rows[0]):
-                  print(f"{key}: {rows[0][key]}")
+        if not rows:
+            break
 
-              print("-" * 60)
+        records.extend(rows)
+        start += len(rows)
 
-              required_fields = [
-                  "teamFullName",
-                  "gameDate",
-                  "gameId",
-                  "shotsFor",
-                  "shotsAgainst",
-                  "goalsFor",
-              ]
+        if total and start >= total:
+            break
 
-              print("\nFIELD VALIDATION:")
+        if len(rows) < PAGE_SIZE:
+            break
 
-              for field in required_fields:
-                  status = (
-                      "FOUND"
-                      if field in rows[0]
-                      else "MISSING"
-                  )
-                  print(f"{field}: {status}")
+    if not records:
+        raise RuntimeError(
+            "NHL API returned no game-level team statistics."
+        )
 
-          else:
-              print("\nWARNING: No game-level rows returned.")
-              print("RESPONSE KEYS:", list(data.keys()))
+    parsed = []
 
-          print("\nDIAGNOSTIC COMPLETE")
-          PY
+    for item in records:
+        code = TEAM_CODES.get(item.get("teamFullName"))
+
+        if not code:
+            continue
+
+        game_date = str(
+            item.get("gameDate") or ""
+        )[:10]
+
+        if not game_date or game_date >= through_date:
+            continue
+
+        shots_for = item.get("shotsForPerGame")
+        shots_against = item.get("shotsAgainstPerGame")
+        goals_for = item.get("goalsFor")
+
+        if (
+            shots_for is None
+            or shots_against is None
+            or goals_for is None
+        ):
+            continue
+
+        parsed.append({
+            "team": code,
+            "date": game_date,
+            "game_id": str(item.get("gameId") or ""),
+            "shots_for": float(shots_for),
+            "shots_against": float(shots_against),
+            "goals_for": float(goals_for),
+        })
+
+    if not parsed:
+        raise RuntimeError(
+            "No valid completed team-game statistics "
+            "were available before the target date."
+        )
+
+    df = pd.DataFrame(parsed)
+
+    df = df.drop_duplicates(
+        subset=["team", "game_id"]
+    )
+
+    df = df.sort_values(
+        ["team", "date", "game_id"],
+        ascending=[True, False, False],
+    )
+
+    df = (
+        df.groupby("team", group_keys=False)
+        .head(games)
+        .copy()
+    )
+
+    recent = {}
+
+    for code, group in df.groupby("team"):
+        total_shots = group["shots_for"].sum()
+
+        if total_shots <= 0:
+            continue
+
+        recent[code] = {
+            "sf": float(group["shots_for"].mean()),
+            "sa": float(group["shots_against"].mean()),
+            "shoot": float(
+                group["goals_for"].sum() / total_shots
+            ),
+            "games": int(len(group)),
+        }
+
+    return recent
+
+
+def blend_team_stats(season_stats, recent_stats):
+    """Blend season averages with recent five-game form."""
+
+    blended = {}
+
+    for code, season in season_stats.items():
+        recent = recent_stats.get(code)
+
+        if recent is None:
+            blended[code] = season.copy()
+            continue
+
+        weight = RECENT_WEIGHT * min(
+            recent["games"] / RECENT_GAMES,
+            1.0,
+        )
+
+        blended[code] = {
+            "sf": (
+                (1 - weight) * season["sf"]
+                + weight * recent["sf"]
+            ),
+            "sa": (
+                (1 - weight) * season["sa"]
+                + weight * recent["sa"]
+            ),
+            "shoot": (
+                (1 - weight) * season["shoot"]
+                + weight * recent["shoot"]
+            ),
+        }
+
+    return blended
+
+
+def build_projections(date, verify=True):
+    """Generate v2 projections using the v1 output schema."""
+
+    games = fetch_schedule(date)
+
+    if not games:
+        return pd.DataFrame(), {
+            "scheduled": 0,
+            "projected": 0,
+            "rosters": {},
+            "model_version": MODEL_VERSION,
+            "recent_team_count": 0,
+        }
+
+    season = season_for(date)
+
+    season_teams = fetch_team_stats(season)
+
+    recent_teams = fetch_recent_team_stats(
+        season,
+        date,
+        games=RECENT_GAMES,
+    )
+
+    teams = blend_team_stats(
+        season_teams,
+        recent_teams,
+    )
+
+    goalies = fetch_goalie_stats(season)
+    starters = fetch_starters(date)
+
+    roster = (
+        verify_rosters(starters)
+        if verify
+        else {
+            code: "NOT CHECKED"
+            for code in starters
+        }
+    )
+
+    now = pd.Timestamp.now(tz="UTC")
+
+    rows = []
+    skipped = []
+
+    for game in games:
+        away = (
+            game.get("awayTeam", {})
+            .get("abbrev")
+        )
+
+        home = (
+            game.get("homeTeam", {})
+            .get("abbrev")
+        )
+
+        start = pd.to_datetime(
+            game.get("startTimeUTC"),
+            utc=True,
+            errors="coerce",
+        )
+
+        if (
+            pd.isna(start)
+            or start <= now
+            or game.get("gameState") in (
+                "LIVE",
+                "CRIT",
+                "FINAL",
+                "OFF",
+            )
+        ):
+            continue
+
+        if (
+            away not in teams
+            or home not in teams
+            or away not in starters
+            or home not in starters
+        ):
+            skipped.append(
+                f"{away} @ {home}: "
+                "team or starter data unavailable"
+            )
+            continue
+
+        away_starter = starters[away]
+        home_starter = starters[home]
+
+        away_sv = goalies.get(
+            (away, norm(away_starter["name"]))
+        )
+
+        home_sv = goalies.get(
+            (home, norm(home_starter["name"]))
+        )
+
+        if away_sv is None or home_sv is None:
+            skipped.append(
+                f"{away} @ {home}: "
+                "goalie statistics missing"
+            )
+            continue
+
+        away_team = teams[away]
+        home_team = teams[home]
+
+        away_shots = (
+            away_team["sf"]
+            + home_team["sa"]
+        ) / 2
+
+        home_shots = (
+            home_team["sf"]
+            + away_team["sa"]
+        ) / 2
+
+        away_goals = away_shots * (
+            away_team["shoot"]
+            + (1 - home_sv)
+        ) / 2
+
+        home_goals = home_shots * (
+            home_team["shoot"]
+            + (1 - away_sv)
+        ) / 2
+
+        statuses = {
+            away_starter["status"],
+            home_starter["status"],
+        }
+
+        if verify and (
+            roster.get(away) != "MATCH"
+            or roster.get(home) != "MATCH"
+        ):
+            reliability = "BLOCKED"
+
+        elif "Unconfirmed" in statuses:
+            reliability = "LOW"
+
+        elif "Likely" in statuses:
+            reliability = "MEDIUM"
+
+        else:
+            reliability = "HIGH"
+
+        rows.append({
+            "Game ID": str(game["id"]),
+            "Game Date": date,
+            "Away Code": away,
+            "Home Code": home,
+            "Away Goalie": away_starter["name"],
+            "Home Goalie": home_starter["name"],
+            "Away Status": away_starter["status"],
+            "Home Status": home_starter["status"],
+            "Away xG": round(away_goals, 4),
+            "Home xG": round(home_goals, 4),
+            "Projected Total": round(
+                away_goals + home_goals,
+                4,
+            ),
+            "Goalie Reliability": reliability,
+            "Start ET": start.tz_convert(ET).strftime(
+                "%I:%M %p ET"
+            ),
+            "Start UTC": start.isoformat(),
+            "Calculated At UTC": now.isoformat(),
+        })
+
+    if rows:
+        projections = (
+            pd.DataFrame(rows)
+            .sort_values(
+                "Projected Total",
+                ascending=False,
+            )
+            .reset_index(drop=True)
+        )
+    else:
+        projections = pd.DataFrame()
+
+    metadata = {
+        "scheduled": len(games),
+        "projected": len(rows),
+        "skipped": skipped,
+        "rosters": roster,
+        "team_count": len(teams),
+        "goalie_count": len(goalies),
+        "recent_team_count": len(recent_teams),
+        "model_version": MODEL_VERSION,
+    }
+
+    return projections, metadata
 
