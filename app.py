@@ -218,10 +218,23 @@ h1, h2, h3 {
             22px 72px minmax(110px, 1fr) 58px 76px;
         gap: 6px;
     }
-    .ff-goalies { grid-column: 3 / 5; }
-    .ff-rel { grid-column: 5; }
-    .ff-matchup img { width: 22px; height: 22px; }
-    .ff-total { font-size: 18px; }
+
+    .ff-goalies {
+        grid-column: 3 / 5;
+    }
+
+    .ff-rel {
+        grid-column: 5;
+    }
+
+    .ff-matchup img {
+        width: 22px;
+        height: 22px;
+    }
+
+    .ff-total {
+        font-size: 18px;
+    }
 }
 
 @media(max-width: 700px) {
@@ -229,10 +242,22 @@ h1, h2, h3 {
         grid-template-columns:
             22px 70px minmax(105px, 1fr) 72px;
     }
-    .ff-shots { display: none; }
-    .ff-goalies { grid-column: 2 / 4; }
-    .ff-rel { grid-column: 4; }
-    .ff-head { font-size: 35px; }
+
+    .ff-shots {
+        display: none;
+    }
+
+    .ff-goalies {
+        grid-column: 2 / 4;
+    }
+
+    .ff-rel {
+        grid-column: 4;
+    }
+
+    .ff-head {
+        font-size: 35px;
+    }
 }
 </style>
 """)
@@ -256,20 +281,26 @@ def safe_float(value):
 def display_text(value, default="—"):
     if value is None:
         return default
+
     try:
         if pd.isna(value):
             return default
     except (TypeError, ValueError):
         pass
+
     return str(value)
 
 
 def format_start(value):
     timestamp = pd.to_datetime(
-        value, utc=True, errors="coerce"
+        value,
+        utc=True,
+        errors="coerce"
     )
+
     if pd.isna(timestamp):
         return "TBD"
+
     return timestamp.tz_convert(ET).strftime("%I:%M %p ET")
 
 
@@ -311,10 +342,13 @@ def get_supabase_client():
     from supabase import create_client
 
     url = st.secrets.get(
-        "SUPABASE_URL", os.environ.get("SUPABASE_URL")
+        "SUPABASE_URL",
+        os.environ.get("SUPABASE_URL")
     )
+
     key = st.secrets.get(
-        "SUPABASE_KEY", os.environ.get("SUPABASE_KEY")
+        "SUPABASE_KEY",
+        os.environ.get("SUPABASE_KEY")
     )
 
     if not url or not key:
@@ -344,7 +378,10 @@ def load_saved_predictions(date):
 
     saved["priority"] = (
         saved["snapshot_type"]
-        .map({"FINAL PREGAME": 0, "EARLY": 1})
+        .map({
+            "FINAL PREGAME": 0,
+            "EARLY": 1
+        })
         .fillna(2)
     )
 
@@ -374,10 +411,13 @@ def load_model_performance():
 @st.cache_data(ttl=600)
 def load_game_accuracy_details():
     """
-    Load game-by-game accuracy records from Supabase.
-    Pagination avoids the usual 1,000-row response limit.
+    Load completed-game prediction accuracy records.
+
+    Pagination prevents truncation at the usual
+    Supabase 1,000-row response limit.
     """
     client = get_supabase_client()
+
     records = []
     page_size = 1000
 
@@ -386,7 +426,10 @@ def load_game_accuracy_details():
             client.table("game_accuracy_details")
             .select("*")
             .order("game_date", desc=True)
-            .range(offset, offset + page_size - 1)
+            .range(
+                offset,
+                offset + page_size - 1
+            )
             .execute()
         )
 
@@ -425,12 +468,16 @@ logo_candidates = [
 ]
 
 logo = next(
-    (path for path in logo_candidates if path.is_file()),
+    (
+        path for path in logo_candidates
+        if path.is_file()
+    ),
     None
 )
 
 header_left, header_right = st.columns(
-    [1, 5], vertical_alignment="center"
+    [1, 5],
+    vertical_alignment="center"
 )
 
 with header_left:
@@ -438,8 +485,8 @@ with header_left:
         st.image(str(logo), width=135)
     else:
         st.html(
-            '<div style="font-size:60px;text-align:center">'
-            '🏒❄️</div>'
+            '<div style="font-size:60px;'
+            'text-align:center">🏒❄️</div>'
         )
 
 with header_right:
@@ -448,9 +495,11 @@ with header_right:
         <div class="ff-sub">
             NHL ANALYTICS • PROJECTION CENTER
         </div>
+
         <div class="ff-head">
             FROZEN <span>FORECAST</span>
         </div>
+
         <div class="ff-sub">
             THE NUMBERS BEHIND THE ICE
         </div>
@@ -485,7 +534,8 @@ with st.sidebar:
         st.rerun()
 
     st.caption(
-        "Historical projections are preserved after puck drop."
+        "Historical projections are preserved "
+        "after puck drop."
     )
 
 
@@ -498,7 +548,9 @@ date_string = str(game_date)
 try:
     schedule = cached_schedule(date_string)
 except Exception as exc:
-    st.error(f"Unable to load NHL schedule: {exc}")
+    st.error(
+        f"Unable to load NHL schedule: {exc}"
+    )
     st.stop()
 
 saved_error = None
@@ -512,17 +564,26 @@ except Exception as exc:
 live_error = None
 
 try:
-    live_df, meta = cached_projections(date_string, verify)
+    live_df, meta = cached_projections(
+        date_string,
+        verify
+    )
 except Exception as exc:
     live_df = pd.DataFrame()
     meta = {}
     live_error = str(exc)
 
 if saved_error:
-    st.warning("Historical database unavailable: " + saved_error)
+    st.warning(
+        "Historical database unavailable: "
+        + saved_error
+    )
 
 if live_error:
-    st.warning("Live projections unavailable: " + live_error)
+    st.warning(
+        "Live projections unavailable: "
+        + live_error
+    )
 
 st.caption(
     f'📅 {game_date.strftime("%A, %B %d, %Y")}'
@@ -562,8 +623,14 @@ unavailable = []
 for game in schedule:
     game_id = str(game.get("id"))
 
-    away = game.get("awayTeam", {}).get("abbrev", "")
-    home = game.get("homeTeam", {}).get("abbrev", "")
+    away = game.get(
+        "awayTeam", {}
+    ).get("abbrev", "")
+
+    home = game.get(
+        "homeTeam", {}
+    ).get("abbrev", "")
+
     status = game_status(game)
 
     saved = saved_lookup.get(game_id)
@@ -573,10 +640,13 @@ for game in schedule:
 
     if status != "UPCOMING" and saved is not None:
         source = "SAVED"
+
     elif status == "UPCOMING" and live is not None:
         source = "LIVE"
+
     elif saved is not None:
         source = "SAVED"
+
     elif live is not None:
         source = "LIVE"
 
@@ -585,30 +655,41 @@ for game in schedule:
             "Game ID": game_id,
             "Away Code": away,
             "Home Code": home,
+
             "Away xG": safe_float(
                 saved.get("away_projected_goals")
             ),
+
             "Home xG": safe_float(
                 saved.get("home_projected_goals")
             ),
+
             "Projected Total": safe_float(
                 saved.get("projected_total")
             ),
+
             "Away Goalie": display_text(
                 saved.get("away_goalie")
             ),
+
             "Home Goalie": display_text(
                 saved.get("home_goalie")
             ),
+
             "Away Status": "Pregame",
             "Home Status": "Pregame",
+
             "Goalie Reliability": display_text(
-                saved.get("goalie_reliability"), "LOW"
+                saved.get("goalie_reliability"),
+                "LOW"
             ),
+
             "Game Status": status,
+
             "Projection Source": display_text(
                 saved.get("snapshot_type")
             ),
+
             "Start ET": format_start(
                 game.get("startTimeUTC")
             ),
@@ -619,32 +700,43 @@ for game in schedule:
             "Game ID": game_id,
             "Away Code": away,
             "Home Code": home,
+
             "Away xG": safe_float(
                 live.get("Away xG")
             ),
+
             "Home xG": safe_float(
                 live.get("Home xG")
             ),
+
             "Projected Total": safe_float(
                 live.get("Projected Total")
             ),
+
             "Away Goalie": display_text(
                 live.get("Away Goalie")
             ),
+
             "Home Goalie": display_text(
                 live.get("Home Goalie")
             ),
+
             "Away Status": display_text(
                 live.get("Away Status")
             ),
+
             "Home Status": display_text(
                 live.get("Home Status")
             ),
+
             "Goalie Reliability": display_text(
-                live.get("Goalie Reliability"), "LOW"
+                live.get("Goalie Reliability"),
+                "LOW"
             ),
+
             "Game Status": status,
             "Projection Source": "LIVE PREGAME",
+
             "Start ET": format_start(
                 game.get("startTimeUTC")
             ),
@@ -652,7 +744,8 @@ for game in schedule:
 
     else:
         unavailable.append(
-            f"{away} @ {home}: no pregame projection available"
+            f"{away} @ {home}: "
+            "no pregame projection available"
         )
         continue
 
@@ -667,7 +760,10 @@ if df.empty:
     st.stop()
 
 df = (
-    df.sort_values("Projected Total", ascending=False)
+    df.sort_values(
+        "Projected Total",
+        ascending=False
+    )
     .reset_index(drop=True)
 )
 
@@ -676,18 +772,41 @@ df = (
 # COUNTS
 # ============================================================
 
-reliability_counts = df["Goalie Reliability"].value_counts()
+reliability_counts = (
+    df["Goalie Reliability"].value_counts()
+)
 
-high = int(reliability_counts.get("HIGH", 0))
-medium = int(reliability_counts.get("MEDIUM", 0))
-low = int(reliability_counts.get("LOW", 0))
-blocked = int(reliability_counts.get("BLOCKED", 0))
+high = int(
+    reliability_counts.get("HIGH", 0)
+)
 
-status_counts = df["Game Status"].value_counts()
+medium = int(
+    reliability_counts.get("MEDIUM", 0)
+)
 
-upcoming = int(status_counts.get("UPCOMING", 0))
-in_progress = int(status_counts.get("LIVE", 0))
-final = int(status_counts.get("FINAL", 0))
+low = int(
+    reliability_counts.get("LOW", 0)
+)
+
+blocked = int(
+    reliability_counts.get("BLOCKED", 0)
+)
+
+status_counts = (
+    df["Game Status"].value_counts()
+)
+
+upcoming = int(
+    status_counts.get("UPCOMING", 0)
+)
+
+in_progress = int(
+    status_counts.get("LIVE", 0)
+)
+
+final = int(
+    status_counts.get("FINAL", 0)
+)
 
 saved_count = int(
     df["Projection Source"]
@@ -715,7 +834,10 @@ with left:
         panel(
             "🏒 TONIGHT'S SLATE",
             f"""
-            <div class="ff-num">{len(df)} GAMES</div>
+            <div class="ff-num">
+                {len(df)} GAMES
+            </div>
+
             <div class="ff-small">
                 🔵 {upcoming} Upcoming<br>
                 🟡 {in_progress} Live<br>
@@ -725,7 +847,9 @@ with left:
         )
     )
 
-    roster_checks = meta.get("rosters", {})
+    roster_checks = meta.get(
+        "rosters", {}
+    )
 
     roster_matches = sum(
         value == "MATCH"
@@ -739,14 +863,20 @@ with left:
             <div class="ff-small">
                 Teams loaded:
                 {meta.get("team_count", 0)}<br>
+
                 Goalies loaded:
                 {meta.get("goalie_count", 0)}<br>
+
                 Official roster matches:
-                {roster_matches} / {len(roster_checks)}<br>
+                {roster_matches} /
+                {len(roster_checks)}<br>
+
                 Scheduled matchups:
                 {len(schedule)}<br>
+
                 Matchups displayed:
                 {len(df)}<br>
+
                 Saved projections displayed:
                 {saved_count}
             </div>
@@ -756,27 +886,36 @@ with left:
 
 
 # ============================================================
-# CENTER — ALL NHL MATCHUPS
+# CENTER — NHL MATCHUPS
 # ============================================================
 
 with middle:
     st.html(
-        panel("🏒 NHL GOAL PROJECTIONS", "")
+        panel(
+            "🏒 NHL GOAL PROJECTIONS",
+            ""
+        )
     )
 
     game_html = []
 
     for i, game in df.iterrows():
-        away = escape(game["Away Code"])
-        home = escape(game["Home Code"])
+        away = escape(
+            game["Away Code"]
+        )
+
+        home = escape(
+            game["Home Code"]
+        )
 
         logo1 = (
-            f"https://assets.nhle.com/logos/nhl/svg/"
-            f"{away}_light.svg"
+            "https://assets.nhle.com/"
+            f"logos/nhl/svg/{away}_light.svg"
         )
+
         logo2 = (
-            f"https://assets.nhle.com/logos/nhl/svg/"
-            f"{home}_light.svg"
+            "https://assets.nhle.com/"
+            f"logos/nhl/svg/{home}_light.svg"
         )
 
         reliability = str(
@@ -784,7 +923,10 @@ with middle:
         ).upper()
 
         if reliability not in (
-            "HIGH", "MEDIUM", "LOW", "BLOCKED"
+            "HIGH",
+            "MEDIUM",
+            "LOW",
+            "BLOCKED"
         ):
             reliability = "LOW"
 
@@ -795,19 +937,29 @@ with middle:
             f'({game["Home Status"]})'
         )
 
-        status = str(game["Game Status"])
-        start = escape(game["Start ET"])
-        source = escape(game["Projection Source"])
+        status = str(
+            game["Game Status"]
+        )
+
+        start = escape(
+            game["Start ET"]
+        )
+
+        source = escape(
+            game["Projection Source"]
+        )
 
         game_html.append(
             f"""
             <div class="ff-game">
+
                 <div>
                     <b>{i + 1:02d}</b>
                 </div>
 
                 <div class="ff-small">
                     {start}
+
                     <div class="ff-state ff-{status.lower()}">
                         {escape(status)}
                     </div>
@@ -832,6 +984,7 @@ with middle:
 
                 <div class="ff-goalies ff-small">
                     {goalie_text}
+
                     <div class="ff-source">
                         {source}
                     </div>
@@ -840,6 +993,7 @@ with middle:
                 <div class="ff-rel ff-pill ff-{reliability.lower()}">
                     {reliability}
                 </div>
+
             </div>
             """
         )
@@ -860,7 +1014,10 @@ with right:
         panel(
             "🥅 GOALIE RELIABILITY",
             f"""
-            <div class="ff-num">{len(df)}</div>
+            <div class="ff-num">
+                {len(df)}
+            </div>
+
             <div class="ff-small">
                 🟢 High: {high}<br>
                 🟡 Medium: {medium}<br>
@@ -873,27 +1030,40 @@ with right:
 
     highest = df.iloc[0]
     lowest = df.iloc[-1]
-    average = df["Projected Total"].mean()
+
+    average = (
+        df["Projected Total"].mean()
+    )
 
     st.html(
         panel(
             "🎯 KEY TAKEAWAYS",
             f"""
             <div class="ff-small">
+
                 Average projected total:
                 <b>{average:.2f}</b>
+
                 <br><br>
 
                 Highest:
-                <b>{highest["Projected Total"]:.2f}</b>
+                <b>
+                    {highest["Projected Total"]:.2f}
+                </b>
+
                 ({escape(highest["Away Code"])}
                 @ {escape(highest["Home Code"])})
+
                 <br><br>
 
                 Lowest:
-                <b>{lowest["Projected Total"]:.2f}</b>
+                <b>
+                    {lowest["Projected Total"]:.2f}
+                </b>
+
                 ({escape(lowest["Away Code"])}
                 @ {escape(lowest["Home Code"])})
+
             </div>
             """
         )
@@ -902,7 +1072,9 @@ with right:
     st.download_button(
         "⬇️ Export projections CSV",
         data=df.to_csv(index=False),
-        file_name=f"frozen_forecast_{game_date}.csv",
+        file_name=(
+            f"frozen_forecast_{game_date}.csv"
+        ),
         mime="text/csv",
         use_container_width=True
     )
@@ -926,9 +1098,14 @@ else:
         "Saved pregame projections could not be loaded."
     )
 
-with st.expander("📸 Historical pregame snapshots"):
+with st.expander(
+    "📸 Historical pregame snapshots"
+):
     if saved_df.empty:
-        st.info("No saved predictions for this date.")
+        st.info(
+            "No saved predictions for this date."
+        )
+
     else:
         columns = [
             "game_id",
@@ -980,7 +1157,9 @@ try:
         )
 
     else:
-        performance_df = performance_df.copy()
+        performance_df = (
+            performance_df.copy()
+        )
 
         numeric_cols = [
             "games_evaluated",
@@ -999,7 +1178,11 @@ try:
                 )
 
         valid = performance_df.dropna(
-            subset=["mae", "rmse", "games_evaluated"]
+            subset=[
+                "mae",
+                "rmse",
+                "games_evaluated"
+            ]
         ).copy()
 
         if valid.empty:
@@ -1009,10 +1192,19 @@ try:
             )
 
         else:
-            best = valid.sort_values(
-                ["mae", "games_evaluated"],
-                ascending=[True, False]
-            ).iloc[0]
+            best = (
+                valid.sort_values(
+                    [
+                        "mae",
+                        "games_evaluated"
+                    ],
+                    ascending=[
+                        True,
+                        False
+                    ]
+                )
+                .iloc[0]
+            )
 
             st.caption(
                 "Summary cards show the lowest observed "
@@ -1047,22 +1239,29 @@ try:
             )
 
             st.caption(
-                f'Model: {best.get("model_version", "Unknown")} '
-                f'| Snapshot: {best.get("snapshot_type", "Unknown")}'
+                f'Model: '
+                f'{best.get("model_version", "Unknown")}'
+                f' | Snapshot: '
+                f'{best.get("snapshot_type", "Unknown")}'
             )
 
-            st.markdown("#### EARLY vs. FINAL PREGAME")
+            st.markdown(
+                "#### EARLY vs. FINAL PREGAME"
+            )
 
             comparison = valid[
                 valid["snapshot_type"].isin(
-                    ["EARLY", "FINAL PREGAME"]
+                    [
+                        "EARLY",
+                        "FINAL PREGAME"
+                    ]
                 )
             ].copy()
 
             if comparison.empty:
                 st.info(
-                    "No snapshot performance comparisons "
-                    "are available."
+                    "No snapshot performance "
+                    "comparisons are available."
                 )
 
             else:
@@ -1089,7 +1288,11 @@ try:
                 )
 
                 chart_data = comparison[
-                    ["model_version", "snapshot_type", "mae"]
+                    [
+                        "model_version",
+                        "snapshot_type",
+                        "mae"
+                    ]
                 ].copy()
 
                 chart_data["Group"] = (
@@ -1107,7 +1310,9 @@ try:
                     y_label="Mean absolute error (goals)"
                 )
 
-            st.markdown("#### How to Read These Metrics")
+            st.markdown(
+                "#### How to Read These Metrics"
+            )
 
             st.caption(
                 "MAE is the average absolute difference "
@@ -1120,13 +1325,13 @@ try:
 
 except Exception as exc:
     st.error(
-        "Historical model performance could not "
-        f"be loaded: {exc}"
+        "Historical model performance "
+        f"could not be loaded: {exc}"
     )
 
 
 # ============================================================
-# NEW — GAME-BY-GAME ACCURACY TRACKER
+# GAME-BY-GAME ACCURACY TRACKER
 # ============================================================
 
 st.divider()
@@ -1145,11 +1350,15 @@ st.caption(
 
 try:
     details = load_game_accuracy_details()
+
 except Exception as exc:
     details = pd.DataFrame()
+
     st.warning(
-        f"Game-by-game accuracy data could not be loaded: {exc}"
+        "Game-by-game accuracy data "
+        f"could not be loaded: {exc}"
     )
+
 
 if details.empty:
     st.info(
@@ -1189,14 +1398,15 @@ else:
 
     if details.empty:
         st.info(
-            "No valid completed-game accuracy records "
-            "are available yet."
+            "No valid completed-game accuracy "
+            "records are available yet."
         )
 
     else:
-        # ----------------------------------------------------
+
+        # ====================================================
         # FILTER OPTIONS
-        # ----------------------------------------------------
+        # ====================================================
 
         model_options = sorted(
             details["model_version"]
@@ -1216,7 +1426,10 @@ else:
 
         snapshot_options = [
             item
-            for item in ("FINAL PREGAME", "EARLY")
+            for item in (
+                "FINAL PREGAME",
+                "EARLY"
+            )
             if item in available_snapshots
         ]
 
@@ -1225,7 +1438,9 @@ else:
             - set(snapshot_options)
         )
 
-        f1, f2, f3 = st.columns([1.2, 1.2, 1])
+        f1, f2, f3 = st.columns(
+            [1.2, 1.2, 1]
+        )
 
         with f1:
             selected_model = st.selectbox(
@@ -1256,9 +1471,9 @@ else:
                 key="accuracy_date"
             )
 
-        # ----------------------------------------------------
+        # ====================================================
         # APPLY FILTERS
-        # ----------------------------------------------------
+        # ====================================================
 
         filtered = details.loc[
             (
@@ -1284,7 +1499,6 @@ else:
                 ascending=False
             )
 
-        # Each game counts once per model/snapshot.
         filtered = filtered.drop_duplicates(
             subset=["game_id"],
             keep="first"
@@ -1305,13 +1519,16 @@ else:
             )
 
         else:
-            # ------------------------------------------------
+
+            # ================================================
             # ACCURACY METRICS
-            # ------------------------------------------------
+            # ================================================
 
             count = len(filtered)
 
-            mae = filtered["absolute_error"].mean()
+            mae = (
+                filtered["absolute_error"].mean()
+            )
 
             rmse = np.sqrt(
                 (
@@ -1319,7 +1536,9 @@ else:
                 ).mean()
             )
 
-            bias = filtered["prediction_error"].mean()
+            bias = (
+                filtered["prediction_error"].mean()
+            )
 
             k1, k2, k3, k4 = st.columns(4)
 
@@ -1343,9 +1562,9 @@ else:
                 f"{bias:+.2f} goals"
             )
 
-            # ------------------------------------------------
+            # ================================================
             # BEST AND WORST PREDICTIONS
-            # ------------------------------------------------
+            # ================================================
 
             best_game = filtered.loc[
                 filtered["absolute_error"].idxmin()
@@ -1373,15 +1592,23 @@ else:
                     f'goals off'
                 )
 
-            # ------------------------------------------------
-            # GAME-BY-GAME TABLE
-            # ------------------------------------------------
+            # ================================================
+            # INDIVIDUAL GAME RESULTS
+            # ================================================
 
-            st.markdown("#### Individual Game Results")
+            st.markdown(
+                "#### Individual Game Results"
+            )
 
             show = filtered.sort_values(
-                ["game_date", "absolute_error"],
-                ascending=[False, False]
+                [
+                    "game_date",
+                    "absolute_error"
+                ],
+                ascending=[
+                    False,
+                    False
+                ]
             ).copy()
 
             show["game_date"] = (
@@ -1421,9 +1648,71 @@ else:
                 hide_index=True
             )
 
-            # ------------------------------------------------
-            # PREDICTION ERROR CHART
-            # ------------------------------------------------
+            # ================================================
+            # NEW: PROJECTED VS ACTUAL GOALS
+            # ================================================
+
+            st.markdown(
+                "#### Projected vs. Actual Goals"
+            )
+
+            comparison_chart = filtered[
+                [
+                    "game_date",
+                    "matchup",
+                    "projected_total",
+                    "actual_total"
+                ]
+            ].copy()
+
+            comparison_chart["Game"] = (
+                comparison_chart["game_date"]
+                .dt.strftime("%m/%d")
+                + " | "
+                + comparison_chart["matchup"].astype(str)
+            )
+
+            comparison_chart = (
+                comparison_chart.sort_values(
+                    [
+                        "game_date",
+                        "matchup"
+                    ]
+                )
+            )
+
+            comparison_chart = (
+                comparison_chart.rename(
+                    columns={
+                        "projected_total":
+                            "Projected Goals",
+                        "actual_total":
+                            "Actual Goals"
+                    }
+                )
+            )
+
+            st.line_chart(
+                comparison_chart.set_index("Game")[
+                    [
+                        "Projected Goals",
+                        "Actual Goals"
+                    ]
+                ],
+                y_label="Total Goals"
+            )
+
+            st.caption(
+                "The projected line represents Frozen "
+                "Forecast's pregame estimate. "
+                "The actual line represents the official "
+                "final total. Larger gaps indicate "
+                "larger prediction errors."
+            )
+
+            # ================================================
+            # PREDICTION ERROR BY MATCHUP
+            # ================================================
 
             st.markdown(
                 "#### Prediction Error by Matchup"
@@ -1441,11 +1730,13 @@ else:
             )
 
             chart = (
-                chart.set_index("Game")[["absolute_error"]]
+                chart.set_index("Game")[
+                    ["absolute_error"]
+                ]
                 .rename(
                     columns={
                         "absolute_error":
-                        "Absolute Error (goals)"
+                            "Absolute Error (goals)"
                     }
                 )
             )
@@ -1455,14 +1746,16 @@ else:
                 horizontal=True
             )
 
-            # ------------------------------------------------
-            # EXPORT DATA
-            # ------------------------------------------------
+            # ================================================
+            # EXPORT ACCURACY DATA
+            # ================================================
 
             st.download_button(
                 "⬇️ Export Game-by-Game Accuracy CSV",
                 data=show.to_csv(index=False),
-                file_name="frozen_forecast_game_accuracy.csv",
+                file_name=(
+                    "frozen_forecast_game_accuracy.csv"
+                ),
                 mime="text/csv",
                 use_container_width=True
             )
@@ -1500,6 +1793,7 @@ if unavailable:
     ):
         for matchup in unavailable:
             st.write(matchup)
+
 
 
 
