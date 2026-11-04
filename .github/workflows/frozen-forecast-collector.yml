@@ -4,9 +4,14 @@ name: Frozen Forecast Collector
 on:
   workflow_dispatch:
   schedule:
+    # EARLY: 9 AM EST / 10 AM EDT
     - cron: "0 14 * * *"
-    - cron: "*/15 21-23 * * *"
-    - cron: "*/15 0-4 * * *"
+
+    # FINAL PREGAME: every 15 minutes, UTC afternoon/evening
+    - cron: "*/15 17-23 * * *"
+
+    # FINAL PREGAME: every 15 minutes, UTC overnight
+    - cron: "*/15 0-6 * * *"
 
 permissions:
   contents: read
