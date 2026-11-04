@@ -1,21 +1,16 @@
 
 import html
-from datetime import datetime, timezone
+import os
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
-from supabase import create_client
-from engine import build_projections
 
-
-# ============================================================
-# CONFIGURATION
-# ============================================================
+from engine import build_projections, fetch_schedule
 
 ET = ZoneInfo("America/New_York")
-
 MODEL_VERSION = "v1_goalie_adjusted"
 
 st.set_page_config(
@@ -25,452 +20,8 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-
-# ============================================================
-# SUPABASE CONNECTION
-# ============================================================
-
-@st.cache_resource
-def get_supabase_client():
-    return create_client(
-        st.secrets["supabase"]["url"],
-        st.secrets["supabase"]["key"],
-    )
-
-
-def check_database_connection():
-    try:
-        client = get_supabase_client()
-
-        client.table("predictions").select(
-            "id"
-        ).limit(1).execute()
-
-        return True, "Connected"
-
-    except Exception as exc:
-        return False, str(exc)
-
-
-# ============================================================
-# HISTORICAL PREGAME SNAPSHOTS
-# ============================================================
-
-def save_early_predictions(projections, selected_date):
-    """
-    Save fresh EARLY pregame predictions to Supabase.
-
-    Existing snapshots are never overwritten.
-    """
-
-    now = datetime.now(timezone.utc)
-
-    if selected_date != now.astimezone(ET).date():
-        return 0, 0, [
-            "Select today's date to save new predictions."
-        ]
-
-    if projections.empty:
-        return 0, 0, [
-            "No eligible pregame projections."
-        ]
-
-    records = []
-    issues = []
-
-    for _, game in projections.iterrows():
-
-        game_id = str(game["Game ID"])
-
-        try:
-            start = pd.to_datetime(
-                game["Start UTC"],
-                utc=True,
-            ).to_pydatetime()
-
-            calculated = pd.to_datetime(
-                game["Calculated At UTC"],
-                utc=True,
-            ).to_pydatetime()
-
-            if start <= now:
-                issues.append(
-                    f"{game_id}: game already started"
-                )
-                continue
-
-            if calculated > now:
-                issues.append(
-                    f"{game_id}: future calculation timestamp"
-                )
-                continue
-
-            if (now - calculated).total_seconds() > 900:
-                issues.append(
-                    f"{game_id}: calculation is stale"
-                )
-                continue
-
-            if calculated >= start:
-                issues.append(
-                    f"{game_id}: not a pregame calculation"
-                )
-                continue
-
-            if (
-                str(game["Goalie Reliability"]).upper()
-                == "BLOCKED"
-            ):
-                issues.append(
-                    f"{game_id}: roster verification blocked"
-                )
-                continue
-
-            records.append({
-                "game_id": game_id,
-                "game_date": str(game["Game Date"])[:10],
-                "model_version": MODEL_VERSION,
-                "snapshot_type": "EARLY",
-                "saved_at": calculated.isoformat(),
-                "scheduled_start": start.isoformat(),
-                "away_team": str(game["Away Code"]),
-                "home_team": str(game["Home Code"]),
-                "away_projected_goals": float(
-                    game["Away xG"]
-                ),
-                "home_projected_goals": float(
-                    game["Home xG"]
-                ),
-                "projected_total": float(
-                    game["Projected Total"]
-                ),
-                "away_goalie": str(
-                    game["Away Goalie"]
-                ),
-                "home_goalie": str(
-                    game["Home Goalie"]
-                ),
-                "goalie_reliability": str(
-                    game["Goalie Reliability"]
-                ),
-            })
-
-        except (KeyError, TypeError, ValueError) as exc:
-            issues.append(
-                f"{game_id}: {exc}"
-            )
-
-    if not records:
-        return 0, 0, issues
-
-    client = get_supabase_client()
-
-    game_ids = [
-        record["game_id"]
-        for record in records
-    ]
-
-    response = (
-        client.table("predictions")
-        .select("game_id")
-        .eq("model_version", MODEL_VERSION)
-        .eq("snapshot_type", "EARLY")
-        .in_("game_id", game_ids)
-        .execute()
-    )
-
-    existing_ids = {
-        str(row["game_id"])
-        for row in (response.data or [])
-    }
-
-    saved = 0
-    skipped = 0
-
-    for record in records:
-
-        if record["game_id"] in existing_ids:
-            skipped += 1
-            continue
-
-        start = pd.to_datetime(
-            record["scheduled_start"],
-            utc=True,
-        ).to_pydatetime()
-
-        if start <= datetime.now(timezone.utc):
-            issues.append(
-                f"{record['game_id']}: puck drop reached"
-            )
-            skipped += 1
-            continue
-
-        try:
-            client.table("predictions").insert(
-                record
-            ).execute()
-
-            saved += 1
-
-        except Exception as exc:
-
-            if (
-                "23505" in str(exc)
-                or "duplicate key" in str(exc).lower()
-            ):
-                skipped += 1
-            else:
-                issues.append(
-                    f"{record['game_id']}: database insert failed"
-                )
-
-    return saved, skipped, issues
-
-
-# ============================================================
-# MODEL PERFORMANCE DATA
-# ============================================================
-
-@st.cache_data(ttl=300)
-def load_model_performance():
-
-    client = get_supabase_client()
-
-    response = (
-        client.table("model_accuracy_summary")
-        .select(
-            "model_version,"
-            "snapshot_type,"
-            "games_evaluated,"
-            "mae,"
-            "rmse,"
-            "bias,"
-            "average_projected_total,"
-            "average_actual_total"
-        )
-        .execute()
-    )
-
-    return pd.DataFrame(
-        response.data or []
-    )
-
-
-def render_model_performance():
-
-    st.divider()
-
-    st.subheader(
-        "📊 Model Performance Center"
-    )
-
-    st.caption(
-        "Historical accuracy calculated from saved "
-        "pregame predictions and official NHL final scores."
-    )
-
-    try:
-        performance = load_model_performance()
-
-    except Exception as exc:
-        st.warning(
-            "Model performance data could not be loaded."
-        )
-        st.caption(str(exc))
-        return
-
-    if performance.empty:
-        st.info(
-            "Waiting for completed games with matching "
-            "historical predictions. Performance metrics "
-            "will appear automatically when results arrive."
-        )
-        return
-
-    numeric_columns = [
-        "games_evaluated",
-        "mae",
-        "rmse",
-        "bias",
-        "average_projected_total",
-        "average_actual_total",
-    ]
-
-    for column in numeric_columns:
-        performance[column] = pd.to_numeric(
-            performance[column],
-            errors="coerce",
-        )
-
-    performance = performance[
-        performance["games_evaluated"] > 0
-    ].copy()
-
-    if performance.empty:
-        st.info(
-            "No completed games have been evaluated yet."
-        )
-        return
-
-    versions = sorted(
-        performance["model_version"]
-        .dropna()
-        .unique()
-        .tolist()
-    )
-
-    if not versions:
-        st.info("No model versions available.")
-        return
-
-    default_version = (
-        MODEL_VERSION
-        if MODEL_VERSION in versions
-        else versions[0]
-    )
-
-    selected_version = st.selectbox(
-        "Model version",
-        versions,
-        index=versions.index(
-            default_version
-        ),
-    )
-
-    subset = performance[
-        performance["model_version"]
-        == selected_version
-    ].copy()
-
-    snapshot_types = subset[
-        "snapshot_type"
-    ].tolist()
-
-    preferred = (
-        "FINAL PREGAME"
-        if "FINAL PREGAME" in snapshot_types
-        else snapshot_types[0]
-    )
-
-    selected_snapshot = st.radio(
-        "Snapshot type",
-        snapshot_types,
-        index=snapshot_types.index(
-            preferred
-        ),
-        horizontal=True,
-    )
-
-    selected = subset[
-        subset["snapshot_type"]
-        == selected_snapshot
-    ].iloc[0]
-
-    def fmt(value):
-        if pd.isna(value):
-            return "—"
-        return f"{value:.3f}"
-
-    st.markdown("### Historical accuracy")
-
-    c1, c2, c3, c4 = st.columns(4)
-
-    c1.metric(
-        "Games evaluated",
-        int(selected["games_evaluated"]),
-    )
-
-    c2.metric(
-        "MAE",
-        fmt(selected["mae"]),
-    )
-
-    c3.metric(
-        "RMSE",
-        fmt(selected["rmse"]),
-    )
-
-    c4.metric(
-        "Bias",
-        fmt(selected["bias"]),
-    )
-
-    c5, c6 = st.columns(2)
-
-    c5.metric(
-        "Average projected goals",
-        fmt(
-            selected["average_projected_total"]
-        ),
-    )
-
-    c6.metric(
-        "Average actual goals",
-        fmt(
-            selected["average_actual_total"]
-        ),
-    )
-
-    st.markdown(
-        "### EARLY vs. FINAL PREGAME"
-    )
-
-    comparison = subset[
-        [
-            "snapshot_type",
-            "games_evaluated",
-            "mae",
-            "rmse",
-            "bias",
-            "average_projected_total",
-            "average_actual_total",
-        ]
-    ].copy()
-
-    comparison.columns = [
-        "Snapshot",
-        "Games",
-        "MAE",
-        "RMSE",
-        "Bias",
-        "Avg projected",
-        "Avg actual",
-    ]
-
-    st.dataframe(
-        comparison,
-        hide_index=True,
-        use_container_width=True,
-    )
-
-    if len(comparison) > 1:
-        st.caption(
-            "EARLY and FINAL PREGAME may include "
-            "different games. A fair head-to-head "
-            "comparison requires matching game IDs."
-        )
-
-    if int(selected["games_evaluated"]) < 30:
-        st.caption(
-            "Small sample: accuracy estimates may "
-            "change considerably as more games finish."
-        )
-
-    st.caption(
-        "MAE = mean absolute error. "
-        "RMSE = root mean squared error. "
-        "Positive bias means projected totals "
-        "are higher than actual totals."
-    )
-
-
-# ============================================================
-# CUSTOM CSS
-# ============================================================
-
 CSS = """
 <style>
-
 .stApp {
     background: radial-gradient(
         ellipse at 50% -12%,
@@ -480,167 +31,144 @@ CSS = """
     );
     color: #eaf6ff;
 }
-
 .block-container {
     max-width: 1700px;
     padding-top: 1.3rem;
 }
-
-h1, h2, h3 {
-    color: #eaf6ff !important;
-}
+h1,h2,h3 {color:#eaf6ff!important}
 
 .ff-hero {
-    border: 1px solid #42baf2;
-    border-radius: 16px;
-    background: linear-gradient(
-        100deg,
-        #081725,
-        #0d3555 52%,
-        #071521
-    );
-    padding: 16px 24px;
-    box-shadow: 0 0 24px #008bff33;
+    border:1px solid #42baf2;
+    border-radius:16px;
+    background:linear-gradient(100deg,#081725,#0d3555 52%,#071521);
+    padding:16px 24px;
+    box-shadow:0 0 24px #008bff33;
 }
-
 .ff-sub {
-    font-size: 12px;
-    letter-spacing: 3px;
-    color: #9adfff;
+    font-size:12px;
+    letter-spacing:3px;
+    color:#9adfff;
 }
-
 .ff-head {
-    font-weight: 1000;
-    font-size: clamp(34px, 5vw, 65px);
-    line-height: 1.04;
-    color: #e9f7ff;
-    text-shadow: 0 0 20px #27b9ff99;
+    font-weight:1000;
+    font-size:clamp(34px,5vw,65px);
+    line-height:1.04;
+    color:#e9f7ff;
+    text-shadow:0 0 20px #27b9ff99;
 }
-
-.ff-head span {
-    color: #44c7ff;
-}
+.ff-head span {color:#44c7ff}
 
 .ff-panel {
-    background: #071c2ee8;
-    border: 1px solid #2a95c9;
-    border-radius: 13px;
-    padding: 15px;
-    margin: 0 0 14px;
-    box-shadow: 0 0 14px #009dff20;
+    background:#071c2ee8;
+    border:1px solid #2a95c9;
+    border-radius:13px;
+    padding:15px;
+    margin:0 0 14px;
+    box-shadow:0 0 14px #009dff20;
 }
-
 .ff-panel h3 {
-    margin: 0 0 13px;
-    font-size: 17px;
-    border-bottom: 1px solid #235577;
-    padding-bottom: 10px;
+    margin:0 0 13px;
+    font-size:17px;
+    border-bottom:1px solid #235577;
+    padding-bottom:10px;
 }
-
 .ff-num {
-    font-size: 42px;
-    font-weight: 900;
-    line-height: 1.2;
+    font-size:42px;
+    font-weight:900;
+    line-height:1.2;
 }
-
+.ff-muted {
+    color:#9db8cc;
+    font-size:12px;
+}
 .ff-game {
-    display: grid;
+    display:grid;
     grid-template-columns:
-        35px 75px minmax(110px, 1fr)
-        62px 90px minmax(180px, 1.5fr) 80px;
-    gap: 8px;
-    align-items: center;
-    border-bottom: 1px solid #1b415e;
-    padding: 11px 3px;
-    font-size: 13px;
+        35px 75px minmax(110px,1fr)
+        62px 90px minmax(180px,1.5fr) 80px;
+    gap:8px;
+    align-items:center;
+    border-bottom:1px solid #1b415e;
+    padding:11px 3px;
+    font-size:13px;
 }
-
 .ff-game img {
-    width: 30px;
-    height: 30px;
-    vertical-align: middle;
-    margin: 0 4px;
+    width:30px;
+    height:30px;
+    vertical-align:middle;
+    margin:0 4px;
 }
-
 .ff-total {
-    background: #0b456b;
-    border: 1px solid #39c7ff;
-    border-radius: 7px;
-    padding: 7px;
-    text-align: center;
-    font-size: 21px;
-    font-weight: 900;
-    color: white;
+    background:#0b456b;
+    border:1px solid #39c7ff;
+    border-radius:7px;
+    padding:7px;
+    text-align:center;
+    font-size:21px;
+    font-weight:900;
+    color:white;
 }
-
 .ff-pill {
-    border: 1px solid;
-    border-radius: 7px;
-    text-align: center;
-    padding: 7px;
-    font-weight: 800;
-    font-size: 11px;
+    border:1px solid;
+    border-radius:7px;
+    text-align:center;
+    padding:7px;
+    font-weight:800;
+    font-size:11px;
 }
-
 .ff-high {
-    color: #5ff3a0;
-    border-color: #18bb69;
-    background: #06351e;
+    color:#5ff3a0;
+    border-color:#18bb69;
+    background:#06351e;
 }
-
 .ff-medium {
-    color: #ffdc62;
-    border-color: #dba926;
-    background: #392c0c;
+    color:#ffdc62;
+    border-color:#dba926;
+    background:#392c0c;
 }
-
-.ff-low, .ff-blocked {
-    color: #ff8c99;
-    border-color: #f24d63;
-    background: #3a1020;
+.ff-low,.ff-blocked {
+    color:#ff8c99;
+    border-color:#f24d63;
+    background:#3a1020;
 }
-
 .ff-small {
-    font-size: 11px;
-    color: #c7d9e8;
+    font-size:11px;
+    color:#c7d9e8;
 }
-
 .ff-footer {
-    color: #9cb7c9;
-    font-size: 12px;
-    margin-top: 14px;
+    color:#9cb7c9;
+    font-size:12px;
+    margin-top:14px;
 }
-
-@media (max-width: 1100px) {
-
+.ff-state {
+    font-size:10px;
+    font-weight:800;
+    letter-spacing:.6px;
+}
+.ff-upcoming {color:#70d9ff}
+.ff-live {color:#ffce62}
+.ff-final {color:#a5b6c8}
+.ff-source {
+    color:#90c7e7;
+    font-size:10px;
+}
+@media(max-width:1100px) {
     .ff-game {
         grid-template-columns:
-            25px 62px minmax(100px, 1fr)
-            62px 76px;
+            25px 62px minmax(100px,1fr) 62px 76px;
     }
-
-    .ff-goalies, .ff-rel {
-        grid-column: 3 / 6;
-    }
-
-    .ff-game img {
-        width: 24px;
-        height: 24px;
-    }
+    .ff-goalies,.ff-rel {grid-column:3/6}
+    .ff-game img {width:24px;height:24px}
 }
-
 </style>
 """
 
-st.markdown(
-    CSS,
-    unsafe_allow_html=True,
-)
+st.markdown(CSS, unsafe_allow_html=True)
 
 
-# ============================================================
+# --------------------------------------------------
 # HEADER
-# ============================================================
+# --------------------------------------------------
 
 app_dir = Path(__file__).resolve().parent
 
@@ -650,63 +178,42 @@ logo_candidates = [
 ]
 
 logo = next(
-    (
-        path
-        for path in logo_candidates
-        if path.is_file()
-    ),
+    (candidate for candidate in logo_candidates if candidate.is_file()),
     None,
 )
 
-left, right = st.columns(
-    [1, 5],
-    vertical_alignment="center",
-)
+left, right = st.columns([1, 5], vertical_alignment="center")
 
 with left:
-
     if logo is not None:
-        st.image(
-            logo.read_text(
-                encoding="utf-8"
-            ),
-            width=140,
-        )
-
+        st.image(logo.read_text(encoding="utf-8"), width=140)
     else:
         st.markdown(
-            "🏒❄️",
+            '<div style="font-size:56px;text-align:center">🏒❄️</div>',
+            unsafe_allow_html=True,
         )
 
 with right:
-
     st.markdown(
-        '<div class="ff-hero">'
-        '<div class="ff-sub">'
-        'NHL ANALYTICS • PROJECTION CENTER'
-        '</div>'
-        '<div class="ff-head">'
-        'FROZEN <span>FORECAST</span>'
-        '</div>'
-        '<div class="ff-sub">'
-        'THE NUMBERS BEHIND THE ICE'
-        '</div>'
-        '</div>',
+        """
+        <div class="ff-hero">
+            <div class="ff-sub">NHL ANALYTICS • PROJECTION CENTER</div>
+            <div class="ff-head">FROZEN <span>FORECAST</span></div>
+            <div class="ff-sub">THE NUMBERS BEHIND THE ICE</div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
 
 
-# ============================================================
-# SIDEBAR
-# ============================================================
+# --------------------------------------------------
+# CONTROLS
+# --------------------------------------------------
 
 now = datetime.now(ET)
 
 with st.sidebar:
-
-    st.header(
-        "❄️ Forecast controls"
-    )
+    st.header("❄️ Forecast controls")
 
     game_date = st.date_input(
         "Game date (Eastern Time)",
@@ -718,400 +225,641 @@ with st.sidebar:
         value=True,
     )
 
-    if st.button(
-        "🔄 Refresh now",
-        use_container_width=True,
-    ):
+    if st.button("🔄 Refresh now", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
     st.caption(
-        "GitHub Actions collect EARLY and FINAL "
-        "PREGAME predictions and official NHL results."
+        "Historical projections are loaded from Supabase. "
+        "Saved pregame values are preserved after puck drop."
     )
 
 
-# ============================================================
-# LIVE PROJECTIONS
-# ============================================================
+# --------------------------------------------------
+# SUPABASE HISTORICAL PREDICTIONS
+# --------------------------------------------------
+
+@st.cache_data(ttl=120)
+def load_saved_predictions(date):
+    from supabase import create_client
+
+    url = st.secrets.get(
+        "SUPABASE_URL",
+        os.environ.get("SUPABASE_URL"),
+    )
+
+    key = st.secrets.get(
+        "SUPABASE_KEY",
+        os.environ.get("SUPABASE_KEY"),
+    )
+
+    if not url or not key:
+        raise RuntimeError(
+            "Supabase credentials are not configured in Streamlit."
+        )
+
+    client = create_client(url, key)
+
+    response = (
+        client.table("predictions")
+        .select("*")
+        .eq("game_date", str(date))
+        .eq("model_version", MODEL_VERSION)
+        .execute()
+    )
+
+    saved = pd.DataFrame(response.data or [])
+
+    if saved.empty:
+        return saved
+
+    saved["priority"] = (
+        saved["snapshot_type"]
+        .map({
+            "FINAL PREGAME": 0,
+            "EARLY": 1,
+        })
+        .fillna(2)
+    )
+
+    saved = (
+        saved.sort_values(
+            ["priority", "saved_at"],
+            ascending=[True, False],
+        )
+        .drop_duplicates(subset=["game_id"], keep="first")
+        .reset_index(drop=True)
+    )
+
+    return saved
+
+
+# --------------------------------------------------
+# LIVE PROJECTIONS AND NHL SCHEDULE
+# --------------------------------------------------
 
 @st.cache_data(
     ttl=600,
     show_spinner="Collecting NHL statistics and starting goalies…",
 )
-def cached_projections(date, verify):
-    return build_projections(
-        date,
-        verify,
+def cached_projections(date, verify_rosters):
+    return build_projections(date, verify_rosters)
+
+
+@st.cache_data(ttl=120)
+def cached_schedule(date):
+    return fetch_schedule(date)
+
+
+def game_status(game):
+    state = str(game.get("gameState") or "").upper()
+
+    if state in ("FINAL", "OFF"):
+        return "FINAL"
+
+    if state in ("LIVE", "CRIT"):
+        return "LIVE"
+
+    start = pd.to_datetime(
+        game.get("startTimeUTC"),
+        utc=True,
+        errors="coerce",
     )
 
+    if pd.notna(start) and start <= pd.Timestamp.now(tz="UTC"):
+        return "LIVE"
+
+    return "UPCOMING"
+
+
+def safe_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
+def format_start(value):
+    timestamp = pd.to_datetime(value, utc=True, errors="coerce")
+
+    if pd.isna(timestamp):
+        return "TBD"
+
+    return timestamp.tz_convert(ET).strftime("%I:%M %p ET")
+
+
+def display_text(value, default="—"):
+    if value is None or pd.isna(value):
+        return default
+    return str(value)
+
+
+# --------------------------------------------------
+# LOAD DATA
+# --------------------------------------------------
+
+date_string = str(game_date)
 
 try:
-    df, meta = cached_projections(
-        str(game_date),
-        verify,
-    )
-
+    schedule = cached_schedule(date_string)
 except Exception as exc:
+    st.error(f"Unable to retrieve NHL schedule: {exc}")
+    st.stop()
 
-    st.error(
-        f"Live refresh failed: {exc}"
-    )
+saved_error = None
 
-    st.info(
-        "The NHL or Daily Faceoff feed may "
-        "be temporarily unavailable."
-    )
+try:
+    saved_df = load_saved_predictions(date_string)
+except Exception as exc:
+    saved_df = pd.DataFrame()
+    saved_error = str(exc)
 
-    df = pd.DataFrame()
+live_error = None
+
+try:
+    live_df, meta = cached_projections(date_string, verify)
+except Exception as exc:
+    live_df = pd.DataFrame()
     meta = {}
+    live_error = str(exc)
 
+if saved_error:
+    st.warning(
+        "Historical database could not be loaded: "
+        f"{saved_error}"
+    )
+
+if live_error:
+    st.warning(
+        "Current live projections could not be refreshed: "
+        f"{live_error}"
+    )
 
 st.caption(
     f'📅 {game_date.strftime("%A, %B %d, %Y")}'
-    f' · Viewed {now.strftime("%I:%M %p ET")}'
-    ' · Refresh cache: up to 10 minutes'
+    f'  ·  Viewed {now.strftime("%I:%M %p ET")}'
+    "  ·  Live cache: up to 10 minutes"
 )
 
 
-# ============================================================
-# THREE-COLUMN NHL DASHBOARD
-# ============================================================
+# --------------------------------------------------
+# MERGE SAVED AND LIVE PROJECTIONS
+# --------------------------------------------------
+
+saved_lookup = {}
+
+if not saved_df.empty:
+    saved_lookup = {
+        str(row["game_id"]): row
+        for _, row in saved_df.iterrows()
+    }
+
+live_lookup = {}
+
+if not live_df.empty:
+    live_lookup = {
+        str(row["Game ID"]): row
+        for _, row in live_df.iterrows()
+    }
+
+rows = []
+unavailable = []
+
+for game in schedule:
+    game_id = str(game.get("id"))
+
+    away = game.get("awayTeam", {}).get("abbrev", "")
+    home = game.get("homeTeam", {}).get("abbrev", "")
+
+    status = game_status(game)
+
+    saved = saved_lookup.get(game_id)
+    live = live_lookup.get(game_id)
+
+    # Historical pregame values take precedence once
+    # a game is LIVE or FINAL.
+    if status != "UPCOMING" and saved is not None:
+        source = str(saved["snapshot_type"])
+
+        row = {
+            "Game ID": game_id,
+            "Away Code": away,
+            "Home Code": home,
+            "Away xG": safe_float(
+                saved.get("away_projected_goals")
+            ),
+            "Home xG": safe_float(
+                saved.get("home_projected_goals")
+            ),
+            "Projected Total": safe_float(
+                saved.get("projected_total")
+            ),
+            "Away Goalie": display_text(
+                saved.get("away_goalie")
+            ),
+            "Home Goalie": display_text(
+                saved.get("home_goalie")
+            ),
+            "Goalie Reliability": display_text(
+                saved.get("goalie_reliability"),
+                "LOW",
+            ),
+            "Away Status": "Pregame",
+            "Home Status": "Pregame",
+            "Start ET": format_start(
+                game.get("startTimeUTC")
+            ),
+            "Game Status": status,
+            "Projection Source": source,
+        }
+
+    elif status == "UPCOMING" and live is not None:
+        row = {
+            "Game ID": game_id,
+            "Away Code": away,
+            "Home Code": home,
+            "Away xG": safe_float(live["Away xG"]),
+            "Home xG": safe_float(live["Home xG"]),
+            "Projected Total": safe_float(
+                live["Projected Total"]
+            ),
+            "Away Goalie": display_text(
+                live["Away Goalie"]
+            ),
+            "Home Goalie": display_text(
+                live["Home Goalie"]
+            ),
+            "Goalie Reliability": display_text(
+                live["Goalie Reliability"],
+                "LOW",
+            ),
+            "Away Status": display_text(
+                live["Away Status"]
+            ),
+            "Home Status": display_text(
+                live["Home Status"]
+            ),
+            "Start ET": format_start(
+                game.get("startTimeUTC")
+            ),
+            "Game Status": status,
+            "Projection Source": "LIVE PREGAME",
+        }
+
+    elif saved is not None:
+        # Also use saved values when current goalie data
+        # is unavailable for an upcoming game.
+        row = {
+            "Game ID": game_id,
+            "Away Code": away,
+            "Home Code": home,
+            "Away xG": safe_float(
+                saved.get("away_projected_goals")
+            ),
+            "Home xG": safe_float(
+                saved.get("home_projected_goals")
+            ),
+            "Projected Total": safe_float(
+                saved.get("projected_total")
+            ),
+            "Away Goalie": display_text(
+                saved.get("away_goalie")
+            ),
+            "Home Goalie": display_text(
+                saved.get("home_goalie")
+            ),
+            "Goalie Reliability": display_text(
+                saved.get("goalie_reliability"),
+                "LOW",
+            ),
+            "Away Status": "Pregame",
+            "Home Status": "Pregame",
+            "Start ET": format_start(
+                game.get("startTimeUTC")
+            ),
+            "Game Status": status,
+            "Projection Source": str(
+                saved["snapshot_type"]
+            ),
+        }
+
+    else:
+        unavailable.append(
+            f"{away} @ {home}: no saved pregame projection"
+        )
+        continue
+
+    rows.append(row)
+
+df = pd.DataFrame(rows)
 
 if df.empty:
-
     st.warning(
-        "No eligible pregame projections for "
-        "this date. Games may have started, "
-        "ended, or lack verified data."
+        "No pregame projections are available for this date."
     )
 
-else:
+    if unavailable:
+        st.write(*unavailable)
 
-    counts = df[
-        "Goalie Reliability"
-    ].value_counts()
+    st.stop()
 
-    high = int(
-        counts.get("HIGH", 0)
+df = (
+    df.sort_values(
+        "Projected Total",
+        ascending=False,
     )
+    .reset_index(drop=True)
+)
 
-    medium = int(
-        counts.get("MEDIUM", 0)
-    )
 
-    low = int(
-        counts.get("LOW", 0)
-    )
+# --------------------------------------------------
+# DASHBOARD COUNTS
+# --------------------------------------------------
 
-    blocked = int(
-        counts.get("BLOCKED", 0)
-    )
+counts = df["Goalie Reliability"].value_counts()
 
-    side, center, insight = st.columns(
-        [1.0, 2.8, 1.15],
-        gap="small",
-    )
+high = int(counts.get("HIGH", 0))
+medium = int(counts.get("MEDIUM", 0))
+low = int(counts.get("LOW", 0))
+blocked = int(counts.get("BLOCKED", 0))
 
-    # --------------------------------------------------------
-    # LEFT COLUMN
-    # --------------------------------------------------------
+status_counts = df["Game Status"].value_counts()
 
-    with side:
+upcoming = int(status_counts.get("UPCOMING", 0))
+in_progress = int(status_counts.get("LIVE", 0))
+final = int(status_counts.get("FINAL", 0))
 
-        st.markdown(
-            f'<div class="ff-panel">'
-            f'<h3>🏒 TONIGHT’S SLATE</h3>'
-            f'<div class="ff-num">{len(df)} GAMES</div>'
-            f'<div class="ff-small">'
-            f'🟢 {high} High &nbsp; '
-            f'🟡 {medium} Medium<br>'
-            f'🔴 {low} Low &nbsp; '
-            f'⛔ {blocked} Blocked'
-            f'</div></div>',
-            unsafe_allow_html=True,
-        )
+saved_count = int(
+    df["Projection Source"].isin(
+        ["EARLY", "FINAL PREGAME"]
+    ).sum()
+)
 
-        roster_checks = meta.get(
-            "rosters", {}
-        )
+side, center, insight = st.columns(
+    [1.0, 2.8, 1.15],
+    gap="small",
+)
 
-        roster_matches = sum(
-            value == "MATCH"
-            for value in roster_checks.values()
-        )
 
-        st.markdown(
-            f'<div class="ff-panel">'
-            f'<h3>📋 DATA CHECKS</h3>'
-            f'<div class="ff-small">'
-            f'Teams loaded: {meta.get("team_count", 0)}<br>'
-            f'Goalies loaded: {meta.get("goalie_count", 0)}<br>'
-            f'Official roster matches: '
-            f'{roster_matches} / {len(roster_checks)}<br>'
-            f'Projected matchups: '
-            f'{len(df)} / {meta.get("scheduled", 0)}'
-            f'</div></div>',
-            unsafe_allow_html=True,
-        )
+# --------------------------------------------------
+# LEFT COLUMN
+# --------------------------------------------------
 
-    # --------------------------------------------------------
-    # CENTER COLUMN — CORRECTED HTML RENDERING
-    # --------------------------------------------------------
-
-    with center:
-
-        st.markdown(
-            '<div class="ff-panel">'
-            '<h3>🏒 NHL GOAL PROJECTIONS</h3>',
-            unsafe_allow_html=True,
-        )
-
-        for i, g in df.iterrows():
-
-            away = html.escape(
-                str(g["Away Code"])
-            )
-
-            home = html.escape(
-                str(g["Home Code"])
-            )
-
-            logo1 = (
-                "https://assets.nhle.com/logos/nhl/svg/"
-                f"{away}_light.svg"
-            )
-
-            logo2 = (
-                "https://assets.nhle.com/logos/nhl/svg/"
-                f"{home}_light.svg"
-            )
-
-            rel = str(
-                g["Goalie Reliability"]
-            )
-
-            goalies = html.escape(
-                f"{g['Away Goalie']} "
-                f"({g['Away Status']}) / "
-                f"{g['Home Goalie']} "
-                f"({g['Home Status']})"
-            )
-
-            # IMPORTANT:
-            # Construct HTML without leading indentation.
-            # This prevents Streamlit from displaying raw tags.
-
-            row = (
-                f'<div class="ff-game">'
-                f'<b>{i + 1:02d}</b>'
-                f'<span class="ff-small">'
-                f'{html.escape(str(g["Start ET"]))}'
-                f'</span>'
-                f'<span>'
-                f'<img src="{logo1}"><b>{away}</b> @ '
-                f'<img src="{logo2}"><b>{home}</b>'
-                f'</span>'
-                f'<span class="ff-small">'
-                f'{g["Away xG"]:.2f} / {g["Home xG"]:.2f}'
-                f'</span>'
-                f'<span class="ff-total">'
-                f'{g["Projected Total"]:.2f}'
-                f'</span>'
-                f'<span class="ff-goalies ff-small">'
-                f'{goalies}'
-                f'</span>'
-                f'<span class="ff-rel ff-pill ff-{rel.lower()}">'
-                f'{rel}'
-                f'</span>'
-                f'</div>'
-            )
-
-            st.markdown(
-                row,
-                unsafe_allow_html=True,
-            )
-
-        st.markdown(
-            "</div>",
-            unsafe_allow_html=True,
-        )
-
-    # --------------------------------------------------------
-    # RIGHT COLUMN
-    # --------------------------------------------------------
-
-    with insight:
-
-        st.markdown(
-            f'<div class="ff-panel">'
-            f'<h3>🥅 GOALIE RELIABILITY</h3>'
-            f'<div class="ff-num">{len(df)}</div>'
-            f'<div class="ff-small">'
-            f'🟢 High: {high}<br>'
-            f'🟡 Medium: {medium}<br>'
-            f'🔴 Low: {low}<br>'
-            f'⛔ Blocked: {blocked}'
-            f'</div></div>',
-            unsafe_allow_html=True,
-        )
-
-        ranked = df.sort_values(
-            "Projected Total",
-            ascending=False,
-        )
-
-        highest = ranked.iloc[0]
-        lowest = ranked.iloc[-1]
-
-        st.markdown(
-            f'<div class="ff-panel">'
-            f'<h3>🎯 KEY TAKEAWAYS</h3>'
-            f'<div class="ff-small">'
-            f'Average projected total: '
-            f'<b>{df["Projected Total"].mean():.2f}</b>'
-            f'<br><br>'
-            f'Highest: '
-            f'<b>{highest["Projected Total"]:.2f}</b> '
-            f'({highest["Away Code"]} @ '
-            f'{highest["Home Code"]})'
-            f'<br><br>'
-            f'Lowest: '
-            f'<b>{lowest["Projected Total"]:.2f}</b> '
-            f'({lowest["Away Code"]} @ '
-            f'{lowest["Home Code"]})'
-            f'</div></div>',
-            unsafe_allow_html=True,
-        )
-
-        st.download_button(
-            "⬇️ Export projections CSV",
-            data=df.to_csv(
-                index=False
-            ),
-            file_name=(
-                f"frozen_forecast_{game_date}.csv"
-            ),
-            mime="text/csv",
-            use_container_width=True,
-        )
-
+with side:
     st.markdown(
-        '<div class="ff-footer">'
-        'Heuristic goal projections based on team shots, '
-        'shooting rates, and adjusted goalie save percentages. '
-        'The “xG” labels are inherited from the development '
-        'notebook; these are not shot-quality expected-goals '
-        'estimates. Goalie reliability describes lineup '
-        'verification, not predictive certainty. '
-        'No betting advantage is established.'
-        '</div>',
+        f"""
+        <div class="ff-panel">
+            <h3>🏒 TONIGHT'S SLATE</h3>
+            <div class="ff-num">{len(df)} GAMES</div>
+            <div class="ff-small">
+                🔵 {upcoming} Upcoming<br>
+                🟡 {in_progress} Live<br>
+                ⚪ {final} Final
+            </div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
 
-    if meta.get("skipped"):
+    roster_checks = meta.get("rosters", {})
 
-        with st.expander(
-            "Matchups omitted due to incomplete data"
+    roster_matches = sum(
+        value == "MATCH"
+        for value in roster_checks.values()
+    )
+
+    st.markdown(
+        f"""
+        <div class="ff-panel">
+            <h3>📋 DATA CHECKS</h3>
+            <div class="ff-small">
+                Teams loaded: {meta.get("team_count", 0)}<br>
+                Goalies loaded: {meta.get("goalie_count", 0)}<br>
+                Official roster matches:
+                {roster_matches} / {len(roster_checks)}<br>
+                Scheduled matchups: {len(schedule)}<br>
+                Matchups displayed: {len(df)}<br>
+                Saved projections displayed: {saved_count}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# --------------------------------------------------
+# CENTER COLUMN
+# --------------------------------------------------
+
+with center:
+    st.markdown(
+        '<div class="ff-panel"><h3>🏒 NHL GOAL PROJECTIONS</h3></div>',
+        unsafe_allow_html=True,
+    )
+
+    # Render each row as its own HTML block.
+    # This avoids Streamlit interpreting the HTML as Markdown code.
+    for i, game in df.iterrows():
+        away = html.escape(str(game["Away Code"]))
+        home = html.escape(str(game["Home Code"]))
+
+        logo1 = (
+            f"https://assets.nhle.com/logos/nhl/svg/"
+            f"{away}_light.svg"
+        )
+
+        logo2 = (
+            f"https://assets.nhle.com/logos/nhl/svg/"
+            f"{home}_light.svg"
+        )
+
+        reliability = str(
+            game["Goalie Reliability"]
+        ).upper()
+
+        if reliability not in (
+            "HIGH", "MEDIUM", "LOW", "BLOCKED"
         ):
-            st.write(
-                *meta["skipped"]
-            )
+            reliability = "LOW"
+
+        away_goalie = display_text(game["Away Goalie"])
+        home_goalie = display_text(game["Home Goalie"])
+
+        away_status = display_text(game["Away Status"])
+        home_status = display_text(game["Home Status"])
+
+        goalies = html.escape(
+            f"{away_goalie} ({away_status}) / "
+            f"{home_goalie} ({home_status})"
+        )
+
+        game_state = str(game["Game Status"])
+        state_class = game_state.lower()
+
+        source = html.escape(
+            str(game["Projection Source"])
+        )
+
+        start_text = html.escape(
+            str(game["Start ET"])
+        )
+
+        row_html = f"""
+<div class="ff-game">
+    <b>{i + 1:02d}</b>
+    <span class="ff-small">
+        {start_text}
+        <span class="ff-state ff-{state_class}">
+            {game_state}
+        </span>
+    </span>
+    <span>
+        <img src="{logo1}">
+        <b>{away}</b> @
+        <img src="{logo2}">
+        <b>{home}</b>
+    </span>
+    <span class="ff-small">
+        {game["Away xG"]:.2f} /
+        {game["Home xG"]:.2f}
+    </span>
+    <span class="ff-total">
+        {game["Projected Total"]:.2f}
+    </span>
+    <span class="ff-goalies ff-small">
+        {goalies}
+        <span class="ff-source">
+            {source}
+        </span>
+    </span>
+    <span class="ff-rel ff-pill ff-{reliability.lower()}">
+        {reliability}
+    </span>
+</div>
+"""
+        st.markdown(
+            row_html.strip(),
+            unsafe_allow_html=True,
+        )
 
 
-# ============================================================
+# --------------------------------------------------
+# RIGHT COLUMN
+# --------------------------------------------------
+
+with insight:
+    st.markdown(
+        f"""
+        <div class="ff-panel">
+            <h3>🥅 GOALIE RELIABILITY</h3>
+            <div class="ff-num">{len(df)}</div>
+            <div class="ff-small">
+                🟢 High: {high}<br>
+                🟡 Medium: {medium}<br>
+                🔴 Low: {low}<br>
+                ⛔ Blocked: {blocked}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    highest = df.iloc[0]
+    lowest = df.iloc[-1]
+
+    st.markdown(
+        f"""
+        <div class="ff-panel">
+            <h3>🎯 KEY TAKEAWAYS</h3>
+            <div class="ff-small">
+                Average projected total:
+                <b>{df["Projected Total"].mean():.2f}</b>
+                <br><br>
+                Highest:
+                <b>{highest["Projected Total"]:.2f}</b>
+                ({html.escape(str(highest["Away Code"]))}
+                @ {html.escape(str(highest["Home Code"]))})
+                <br><br>
+                Lowest:
+                <b>{lowest["Projected Total"]:.2f}</b>
+                ({html.escape(str(lowest["Away Code"]))}
+                @ {html.escape(str(lowest["Home Code"]))})
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.download_button(
+        "⬇️ Export projections CSV",
+        data=df.to_csv(index=False),
+        file_name=f"frozen_forecast_{game_date}.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+
+# --------------------------------------------------
 # HISTORICAL DATABASE STATUS
-# ============================================================
+# --------------------------------------------------
 
 st.divider()
 
-connected, message = check_database_connection()
-
-if connected:
-
+if saved_error is None:
     st.success(
-        "🟢 Frozen Forecast historical database connected"
+        f"Frozen Forecast historical database connected. "
+        f"{len(saved_lookup)} games have saved pregame predictions."
     )
-
 else:
-
-    st.error(
-        "🔴 Historical database connection failed"
+    st.warning(
+        "Historical database unavailable. "
+        "Only current pregame projections can be displayed."
     )
 
-    st.caption(message)
+with st.expander("📸 Historical pregame snapshots"):
+    if saved_df.empty:
+        st.info("No saved predictions for this date.")
+    else:
+        st.dataframe(
+            saved_df[
+                [
+                    "game_id",
+                    "away_team",
+                    "home_team",
+                    "snapshot_type",
+                    "projected_total",
+                    "saved_at",
+                ]
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
 
 
-# ============================================================
-# HISTORICAL SNAPSHOT CONTROLS
-# ============================================================
+# --------------------------------------------------
+# NOTES
+# --------------------------------------------------
 
-if not df.empty:
+st.markdown(
+    """
+    <div class="ff-footer">
+        Frozen Forecast uses heuristic goal projections based on
+        team shots, shooting rates, and adjusted goalie save percentages.
+        The xG labels are inherited from the development notebook and
+        do not represent shot-quality expected goals.
+        Saved EARLY and FINAL PREGAME predictions remain unchanged
+        after puck drop. Goalie reliability describes lineup
+        verification, not predictive certainty.
+        No betting advantage is established.
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
-    st.divider()
+if unavailable:
+    with st.expander("Matchups without available projections"):
+        for matchup in unavailable:
+            st.write(matchup)
 
-    st.subheader(
-        "📸 Historical pregame snapshots"
-    )
-
-    st.caption(
-        "Manual EARLY snapshots for the baseline model. "
-        "Automated collection also runs through GitHub Actions."
-    )
-
-    if st.button(
-        "💾 Save EARLY pregame predictions"
-    ):
-
-        try:
-
-            saved, skipped, issues = save_early_predictions(
-                df,
-                game_date,
-            )
-
-            if saved:
-
-                st.success(
-                    f"Saved {saved} new immutable "
-                    "EARLY pregame snapshots."
-                )
-
-            else:
-
-                st.info(
-                    "No new pregame snapshots were saved."
-                )
-
-            if skipped:
-
-                st.caption(
-                    f"{skipped} existing or ineligible "
-                    "snapshots were skipped."
-                )
-
-            if issues:
-
-                with st.expander(
-                    "Skipped games and warnings"
-                ):
-
-                    for issue in issues:
-                        st.write(issue)
-
-        except Exception as exc:
-
-            st.error(
-                "Unable to save historical snapshots."
-            )
-
-            st.caption(str(exc))
-
-
-# ============================================================
-# MODEL PERFORMANCE CENTER
-# ============================================================
-
-render_model_performance()
 
 
