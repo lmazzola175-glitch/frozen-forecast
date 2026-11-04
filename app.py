@@ -114,11 +114,6 @@ h1, h2, h3 {
     line-height: 1.85;
 }
 
-.ff-muted {
-    color: #9db8cc;
-    font-size: 12px;
-}
-
 .ff-game {
     display: grid;
     grid-template-columns:
@@ -225,14 +220,6 @@ h1, h2, h3 {
 .ff-goalies {
     overflow-wrap: anywhere;
     line-height: 1.45;
-}
-
-.ff-summary-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    font-size: 11px;
-    margin-top: 6px;
 }
 
 .ff-section-title {
@@ -975,10 +962,6 @@ with middle:
             """
         )
 
-    # Render the entire list as ONE HTML block.
-    # This prevents Streamlit from interpreting
-    # indented HTML as Markdown code.
-
     st.html(
         '<div class="ff-games">'
         + "".join(game_html)
@@ -1102,7 +1085,7 @@ with st.expander(
 
 
 # ============================================================
-# HISTORICAL MODEL PERFORMANCE
+# HISTORICAL MODEL PERFORMANCE — STEP 2
 # ============================================================
 
 st.divider()
@@ -1114,9 +1097,8 @@ st.html("""
 """)
 
 st.caption(
-    "Frozen Forecast compares saved pregame "
-    "goal projections with official NHL final "
-    "scores to measure model accuracy."
+    "Frozen Forecast evaluates frozen pregame "
+    "goal projections against official NHL final scores."
 )
 
 try:
@@ -1124,53 +1106,183 @@ try:
 
     if performance_df.empty:
         st.info(
-            "No completed games with matching "
-            "saved predictions are available yet. "
-            "Metrics will populate automatically "
-            "after completed games are collected."
+            "Waiting for completed games with matching "
+            "pregame predictions. Accuracy metrics and "
+            "charts will populate after the results "
+            "collector saves those final scores."
         )
 
     else:
-        st.success(
-            "Historical model performance connected."
-        )
+        performance_df = performance_df.copy()
 
-        st.dataframe(
-            performance_df,
-            use_container_width=True,
-            hide_index=True
-        )
+        numeric_cols = [
+            "games_evaluated",
+            "mae",
+            "rmse",
+            "bias",
+            "average_projected_total",
+            "average_actual_total",
+        ]
 
-        if "mae" in performance_df.columns:
-            best = (
-                performance_df.sort_values("mae")
-                .iloc[0]
+        for col in numeric_cols:
+            if col in performance_df.columns:
+                performance_df[col] = pd.to_numeric(
+                    performance_df[col],
+                    errors="coerce"
+                )
+
+        valid = performance_df.dropna(
+            subset=["mae", "rmse", "games_evaluated"]
+        ).copy()
+
+        if valid.empty:
+            st.info(
+                "Performance records are present, "
+                "but valid evaluation metrics "
+                "are not available yet."
             )
 
-            c1, c2, c3 = st.columns(3)
+        else:
+            # Descriptive summary only:
+            # Lowest observed MAE among available groups.
 
-            with c1:
-                st.metric(
-                    "Best Model MAE",
-                    f'{float(best["mae"]):.2f}'
+            best = valid.sort_values(
+                ["mae", "games_evaluated"],
+                ascending=[True, False]
+            ).iloc[0]
+
+            st.caption(
+                "Summary cards show the lowest observed "
+                "MAE among available model/snapshot groups. "
+                "Small samples may be misleading."
+            )
+
+            c1, c2, c3, c4 = st.columns(4)
+
+            c1.metric(
+                "Games Evaluated",
+                f'{int(best["games_evaluated"]):,}'
+            )
+
+            c2.metric(
+                "Mean Absolute Error",
+                f'{best["mae"]:.2f} goals'
+            )
+
+            c3.metric(
+                "Root Mean Squared Error",
+                f'{best["rmse"]:.2f} goals'
+            )
+
+            c4.metric(
+                "Prediction Bias",
+                (
+                    f'{best["bias"]:+.2f} goals'
+                    if pd.notna(best.get("bias"))
+                    else "—"
+                )
+            )
+
+            st.caption(
+                f'Model: {best.get("model_version", "Unknown")} '
+                f'| Snapshot: {best.get("snapshot_type", "Unknown")}'
+            )
+
+            # ------------------------------------------------
+            # EARLY VS FINAL PREGAME COMPARISON
+            # ------------------------------------------------
+
+            st.markdown(
+                "#### EARLY vs. FINAL PREGAME"
+            )
+
+            comparison = valid[
+                valid["snapshot_type"].isin(
+                    ["EARLY", "FINAL PREGAME"]
+                )
+            ].copy()
+
+            if comparison.empty:
+                st.info(
+                    "No EARLY or FINAL PREGAME "
+                    "performance comparisons are available."
                 )
 
-            with c2:
-                st.metric(
-                    "Best Model RMSE",
-                    f'{float(best["rmse"]):.2f}'
+            else:
+                display_columns = [
+                    "model_version",
+                    "snapshot_type",
+                    "games_evaluated",
+                    "mae",
+                    "rmse",
+                    "bias",
+                    "average_projected_total",
+                    "average_actual_total",
+                ]
+
+                display_columns = [
+                    col
+                    for col in display_columns
+                    if col in comparison.columns
+                ]
+
+                st.dataframe(
+                    comparison[display_columns],
+                    use_container_width=True,
+                    hide_index=True,
                 )
 
-            with c3:
-                st.metric(
-                    "Games Evaluated",
-                    int(best["games_evaluated"])
+                chart_data = comparison[
+                    [
+                        "model_version",
+                        "snapshot_type",
+                        "mae",
+                    ]
+                ].copy()
+
+                chart_data["Group"] = (
+                    chart_data["model_version"].astype(str)
+                    + " | "
+                    + chart_data["snapshot_type"].astype(str)
                 )
+
+                st.markdown(
+                    "#### Mean Absolute Error by Snapshot"
+                )
+
+                st.bar_chart(
+                    chart_data.set_index("Group")[["mae"]],
+                    y_label="Mean absolute error (goals)",
+                )
+
+            # ------------------------------------------------
+            # METRIC EXPLANATIONS
+            # ------------------------------------------------
+
+            st.markdown(
+                "#### How to Read These Metrics"
+            )
+
+            st.caption(
+                "MAE is the average absolute difference "
+                "between projected and actual total goals. "
+                "RMSE penalizes larger errors more heavily. "
+                "Positive bias means the model tends to "
+                "project too many goals; negative bias "
+                "means it tends to project too few."
+            )
+
+            st.info(
+                "A true game-by-game error trend requires "
+                "the underlying prediction/result records, "
+                "not just the aggregated summary view. "
+                "We'll add that as the next step."
+            )
 
 except Exception as exc:
     st.error(
-        "Historical model performance "
-        f"could not be loaded: {exc}"
+        "Historical model performance could not "
+        f"be loaded: {exc}"
     )
 
 
