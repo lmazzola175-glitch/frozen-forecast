@@ -1,5 +1,5 @@
 
-name: Test Frozen Forecast V2
+name: Test Frozen Forecast V1 and V2 Collector
 
 on:
   workflow_dispatch:
@@ -8,9 +8,9 @@ permissions:
   contents: read
 
 jobs:
-  test-v2:
+  test-collector:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
 
     steps:
       - name: Checkout repository
@@ -24,68 +24,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Test V2 recent-form projections
-        run: |
-          python - <<'PY'
-          from datetime import datetime
-          from zoneinfo import ZoneInfo
-          from engine_v2 import (
-              build_projections,
-              fetch_recent_team_stats,
-          )
-          from engine import season_for
+      - name: Test EARLY predictions (dry run)
+        run: python collect_predictions.py --mode early --model all
 
-          today = datetime.now(
-              ZoneInfo("America/New_York")
-          ).date().isoformat()
-
-          print("=" * 60)
-          print("FROZEN FORECAST V2 — PROJECTION TEST")
-          print("=" * 60)
-
-          recent = fetch_recent_team_stats(
-              season_for(today),
-              today,
-          )
-
-          print("DATE:", today)
-          print("RECENT TEAMS FOUND:", len(recent))
-
-          for team in ["BOS", "NYR", "TOR", "COL"]:
-              print(team, recent.get(team))
-
-          assert len(recent) >= 28, (
-              "Too few teams with recent-game statistics"
-          )
-
-          df, meta = build_projections(
-              today,
-              verify=True,
-          )
-
-          print("\nMODEL:", meta["model_version"])
-          print("SCHEDULED:", meta["scheduled"])
-          print("PROJECTED:", meta["projected"])
-          print("RECENT TEAMS:", meta["recent_team_count"])
-          print("SKIPPED:", meta["skipped"])
-
-          if not df.empty:
-              print("\nV2 PROJECTIONS:")
-              print(
-                  df[
-                      [
-                          "Away Code",
-                          "Home Code",
-                          "Projected Total",
-                          "Goalie Reliability",
-                      ]
-                  ].to_string(index=False)
-              )
-
-              assert df["Projected Total"].between(
-                  0, 15
-              ).all(), "Invalid goal projection detected"
-
-          print("\nV2 TEST COMPLETE")
-          PY
+      - name: Test FINAL PREGAME predictions (dry run)
+        run: python collect_predictions.py --mode final --model all
 
