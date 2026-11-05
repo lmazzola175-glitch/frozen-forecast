@@ -764,28 +764,33 @@ st.html('''
 .ff-kpi-label {font-size:10px;color:#9fbdd1;letter-spacing:.7px;text-transform:uppercase}
 .ff-kpi-value {font-size:26px;font-weight:900;color:#f4fbff;margin:2px 0}
 .ff-kpi-sub {font-size:11px;color:#91b5cf}
-.ff-scoreboard {display:flex;flex-direction:column;gap:4px;width:100%;min-width:0}
-.ff-score-row {display:grid;grid-template-columns:105px minmax(205px,1.3fr) 100px minmax(185px,1fr) minmax(145px,.75fr) 80px;gap:8px;align-items:center;padding:6px 12px;background:#0a2033;border:1px solid #24455e;border-radius:9px;min-height:98px}
+.ff-scoreboard {display:flex;flex-direction:column;gap:7px;width:100%;max-width:1190px;margin:0 auto}
+.ff-score-row {display:grid;grid-template-columns:100px minmax(340px,1.3fr) 110px minmax(210px,1fr);gap:16px;align-items:center;padding:11px 16px;background:#0a2033;border:1px solid #24455e;border-radius:12px;min-height:112px}
 .ff-score-row > div {min-width:0}
 .ff-score-row:hover {background:#102b43;border-color:#3b789e}
 .ff-small {font-size:10px;color:#9fbad0}
 .ff-time {font-size:12px;color:#e5f4ff;font-weight:750}
-.ff-teams {display:flex;flex-direction:column;gap:3px}
-.ff-team-line {display:flex;align-items:center;gap:9px;font-size:13px;color:#e8f6ff;font-weight:800;white-space:nowrap}
-.ff-team-line img {width:42px;height:42px;min-width:42px;object-fit:contain;display:block;flex-shrink:0}
-.ff-goals {margin-left:auto;color:#9ddaff;font-size:13px;font-variant-numeric:tabular-nums}
-.ff-total {font-size:25px;font-weight:900;color:#54d2ff;line-height:1.1}
-.ff-winner {font-size:13px;font-weight:850;color:#86f0c8}
-.ff-prob {display:flex;width:100%;height:6px;overflow:hidden;border-radius:6px;background:#16344d;margin:5px 0}
+.ff-teams {display:flex;flex-direction:column;gap:5px}
+.ff-team-line {display:grid;grid-template-columns:44px minmax(0,1fr) 48px;align-items:center;gap:10px;font-size:14px;color:#e8f6ff;font-weight:800}
+.ff-team-line img {width:44px;height:40px;object-fit:contain;display:block}
+.ff-team-name {overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ff-goals {color:#9ddaff;font-size:15px;font-weight:800;text-align:right;font-variant-numeric:tabular-nums}
+.ff-total-cell {text-align:center}
+.ff-total-cell .ff-total {font-size:29px;font-weight:900;color:#54d2ff;line-height:1.1}
+.ff-winner {font-size:14px;font-weight:850;color:#86f0c8}
+.ff-prob {display:flex;width:100%;height:7px;overflow:hidden;border-radius:6px;background:#16344d;margin:8px 0 5px}
 .ff-away-bar {background:#629ce2}.ff-home-bar {background:#35cbb5}
 .ff-prob-legend {display:flex;justify-content:space-between;font-size:10px;color:#c2d9e9}
-.ff-goalie {font-size:11px;color:#bbd1e0;line-height:1.25;overflow-wrap:anywhere}
 .ff-status {font-size:10px;color:#9fc1d8}
 .ff-risk {font-weight:850;font-size:11px}
 .ff-risk-high {color:#61e6a5}.ff-risk-medium {color:#ffdd74}.ff-risk-low,.ff-risk-blocked {color:#ff899c}.ff-risk-unknown {color:#9fbad0}
-.ff-score-header {display:grid;grid-template-columns:105px minmax(205px,1.3fr) 100px minmax(185px,1fr) minmax(145px,.75fr) 80px;gap:8px;padding:0 14px 5px;color:#86a9c2;font-size:10px;text-transform:uppercase;letter-spacing:.6px}
-@media(max-width:900px){.ff-score-header{display:none}.ff-score-row{grid-template-columns:75px minmax(150px,1fr) 80px minmax(135px,1fr);gap:9px}.ff-goalie,.ff-risk-cell{grid-column:span 2}.ff-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:600px){.ff-score-row{grid-template-columns:65px minmax(115px,1fr) 72px;gap:7px;padding:10px}.ff-win-cell{grid-column:2 / 4}.ff-goalie,.ff-risk-cell{grid-column:1 / 4}.ff-team-line{font-size:12px;gap:7px}.ff-team-line img{width:32px;height:32px;min-width:32px}.ff-total{font-size:23px}.ff-kpi{padding:10px}.ff-kpi-value{font-size:23px}}
+.ff-score-header {display:grid;grid-template-columns:100px minmax(340px,1.3fr) 110px minmax(210px,1fr);gap:16px;max-width:1190px;margin:0 auto;padding:0 16px 6px;color:#86a9c2;font-size:10px;text-transform:uppercase;letter-spacing:.6px}
+.ff-game-detail {grid-column:1/-1;border-top:1px solid #24455e;padding-top:5px;color:#9fc1d8;font-size:11px}
+.ff-game-detail summary {cursor:pointer;list-style:revert;color:#8ac5e9;font-weight:650;width:max-content;max-width:100%}
+.ff-game-detail[open] summary {margin-bottom:6px}
+.ff-detail-body {display:flex;flex-wrap:wrap;gap:10px 24px;line-height:1.5}
+@media(max-width:900px){.ff-score-header{display:none}.ff-score-row{grid-template-columns:82px minmax(210px,1fr) 85px;gap:10px}.ff-win-cell{grid-column:2 / 4}.ff-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.ff-team-line{grid-template-columns:38px minmax(0,1fr) 42px}.ff-team-line img{width:38px;height:36px}}
+@media(max-width:600px){.ff-score-row{grid-template-columns:1fr 78px;gap:9px;padding:12px}.ff-time-cell{grid-column:1/-1;display:flex;gap:9px;align-items:center}.ff-teams{grid-column:1}.ff-total-cell{grid-column:2}.ff-win-cell{grid-column:1/-1}.ff-team-line{font-size:12px;grid-template-columns:34px minmax(0,1fr) 38px;gap:6px}.ff-team-line img{width:34px;height:34px}.ff-goals{font-size:13px}.ff-total-cell .ff-total{font-size:25px}.ff-kpi{padding:10px}.ff-kpi-value{font-size:23px}}
 </style>
 ''')
 
@@ -805,10 +810,27 @@ st.html(f'''
 <div class="ff-board-note">{escape(MODEL_OPTIONS[selected_model])} · Goal projections and estimated full-game win probabilities · {saved_count} saved pregame snapshots displayed</div>
 ''')
 
+# Full names are display-only; the underlying model keeps official team codes.
+TEAM_NAMES = {
+    "ANA": "Anaheim Ducks", "BOS": "Boston Bruins", "BUF": "Buffalo Sabres",
+    "CAR": "Carolina Hurricanes", "CBJ": "Columbus Blue Jackets", "CGY": "Calgary Flames",
+    "CHI": "Chicago Blackhawks", "COL": "Colorado Avalanche", "DAL": "Dallas Stars",
+    "DET": "Detroit Red Wings", "EDM": "Edmonton Oilers", "FLA": "Florida Panthers",
+    "LAK": "Los Angeles Kings", "MIN": "Minnesota Wild", "MTL": "Montreal Canadiens",
+    "NJD": "New Jersey Devils", "NSH": "Nashville Predators", "NYI": "New York Islanders",
+    "NYR": "New York Rangers", "OTT": "Ottawa Senators", "PHI": "Philadelphia Flyers",
+    "PIT": "Pittsburgh Penguins", "SEA": "Seattle Kraken", "SJS": "San Jose Sharks",
+    "STL": "St. Louis Blues", "TBL": "Tampa Bay Lightning", "TOR": "Toronto Maple Leafs",
+    "UTA": "Utah Mammoth", "VAN": "Vancouver Canucks", "VGK": "Vegas Golden Knights",
+    "WPG": "Winnipeg Jets", "WSH": "Washington Capitals",
+}
+
 score_rows = []
 for _, game in df.iterrows():
     away = escape(game["Away Code"])
     home = escape(game["Home Code"])
+    away_name = escape(TEAM_NAMES.get(game["Away Code"], game["Away Code"]))
+    home_name = escape(TEAM_NAMES.get(game["Home Code"], game["Home Code"]))
     away_logo = f"https://assets.nhle.com/logos/nhl/svg/{away}_light.svg"
     home_logo = f"https://assets.nhle.com/logos/nhl/svg/{home}_light.svg"
     reliability = game["Goalie Reliability"]
@@ -830,21 +852,22 @@ for _, game in df.iterrows():
     goalie_names = f'{escape(game["Away Goalie"])} / {escape(game["Home Goalie"])}'
     score_rows.append(f'''
     <div class="ff-score-row">
-      <div><div class="ff-time">{escape(game["Start ET"])}</div><div class="ff-small">{escape(game["Game Status"])}</div><div class="ff-status">{source}</div></div>
+      <div class="ff-time-cell"><div class="ff-time">{escape(game["Start ET"])}</div><div class="ff-small">{escape(game["Game Status"])}</div><div class="ff-status">{source}</div></div>
       <div class="ff-teams">
-        <div class="ff-team-line"><img src="{away_logo}" alt="{away} logo"><span>{away}</span><span class="ff-goals">{display_number(game["Away xG"])}</span></div>
-        <div class="ff-team-line"><img src="{home_logo}" alt="{home} logo"><span>{home}</span><span class="ff-goals">{display_number(game["Home xG"])}</span></div>
+        <div class="ff-team-line"><img src="{away_logo}" alt="{away} logo"><span class="ff-team-name" title="{away_name}">{away_name}</span><span class="ff-goals">{display_number(game["Away xG"])}</span></div>
+        <div class="ff-team-line"><img src="{home_logo}" alt="{home} logo"><span class="ff-team-name" title="{home_name}">{home_name}</span><span class="ff-goals">{display_number(game["Home xG"])}</span></div>
       </div>
-      <div><div class="ff-total">{display_number(game["Projected Total"])}</div><div class="ff-small">total goals</div></div>
+      <div class="ff-total-cell"><div class="ff-small">TOTAL</div><div class="ff-total">{display_number(game["Projected Total"])}</div><div class="ff-small">projected goals</div></div>
       <div class="ff-win-cell"><div class="ff-winner">{pick}</div>
         <div class="ff-prob"><div class="ff-away-bar" style="width:{away_pct:.2f}%"></div><div class="ff-home-bar" style="width:{home_pct:.2f}%"></div></div>
         <div class="ff-prob-legend"><span>{away} {f"{away_pct:.1f}%" if valid_probs else "—"}</span><span>{home} {f"{home_pct:.1f}%" if valid_probs else "—"}</span></div>
       </div>
-      <div class="ff-goalie">{goalie_names}</div>
-      <div class="ff-risk-cell"><span class="ff-risk ff-risk-{reliability.lower()}">{reliability}</span></div>
+      <details class="ff-game-detail"><summary>Goalies &amp; reliability · <span class="ff-risk ff-risk-{reliability.lower()}">{reliability}</span></summary>
+        <div class="ff-detail-body"><span><strong>Starting goalies:</strong> {goalie_names}</span><span><strong>Source:</strong> {source}</span></div>
+      </details>
     </div>''')
 
-st.html('''<div class="ff-score-header"><span>Start / source</span><span>Matchup / projected goals</span><span>Projected total</span><span>Winner probability</span><span>Starting goalies</span><span>Reliability</span></div>''' + '<div class="ff-scoreboard">' + ''.join(score_rows) + '</div>')
+st.html('''<div class="ff-score-header"><span>Start / source</span><span>Teams / projected goals</span><span>Projected total</span><span>Winner probability</span></div>''' + '<div class="ff-scoreboard">' + ''.join(score_rows) + '</div>')
 
 st.caption("UNKNOWN goalie reliability means the saved snapshot lacks verifiable starter-confirmation statuses; it does not imply an unconfirmed goalie.")
 st.caption("Win probabilities use independent Poisson goal distributions and a 50/50 split of regulation ties. They have not been historically calibrated. Goal projections are estimates, not betting recommendations.")
@@ -2124,7 +2147,6 @@ if unavailable:
     ):
         for matchup in unavailable:
             st.write(matchup)
-
 
 
 
