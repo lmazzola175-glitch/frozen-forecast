@@ -7,6 +7,9 @@ Uses the original v1 goalie-adjusted projection formula,
 blending season team statistics with the previous five
 completed games at a maximum weight of 20%.
 
+Adds Poisson-based game winner probabilities using
+the shared win_probability.py module.
+
 Does not modify v1 or write predictions to Supabase.
 """
 
@@ -27,6 +30,8 @@ from engine import (
     verify_rosters,
 )
 
+from win_probability import calculate_win_probabilities
+
 
 MODEL_VERSION = "v2_recent5_w20"
 
@@ -35,6 +40,10 @@ RECENT_WEIGHT = 0.20
 
 PAGE_SIZE = 100
 
+
+# ============================================================
+# RECENT TEAM STATISTICS
+# ============================================================
 
 def fetch_recent_team_stats(season, through_date, games=RECENT_GAMES):
     """Retrieve the previous N games for each NHL team.
@@ -161,6 +170,10 @@ def fetch_recent_team_stats(season, through_date, games=RECENT_GAMES):
     return recent
 
 
+# ============================================================
+# BLEND SEASON AND RECENT FORM
+# ============================================================
+
 def blend_team_stats(season_stats, recent_stats):
     """Blend season averages with recent five-game form."""
 
@@ -196,8 +209,16 @@ def blend_team_stats(season_stats, recent_stats):
     return blended
 
 
+# ============================================================
+# V2 PROJECTIONS + WIN PROBABILITIES
+# ============================================================
+
 def build_projections(date, verify=True):
-    """Generate v2 projections using the v1 output schema."""
+    """Generate v2 projections using the v1 output schema.
+
+    Adds projected winner, home/away win probabilities,
+    winner confidence, and regulation tie probability.
+    """
 
     games = fetch_schedule(date)
 
@@ -243,6 +264,7 @@ def build_projections(date, verify=True):
     skipped = []
 
     for game in games:
+
         away = (
             game.get("awayTeam", {})
             .get("abbrev")
@@ -304,6 +326,10 @@ def build_projections(date, verify=True):
         away_team = teams[away]
         home_team = teams[home]
 
+        # ----------------------------------------
+        # ORIGINAL V2 GOAL FORMULA — UNCHANGED
+        # ----------------------------------------
+
         away_shots = (
             away_team["sf"]
             + home_team["sa"]
@@ -323,6 +349,23 @@ def build_projections(date, verify=True):
             home_team["shoot"]
             + (1 - away_sv)
         ) / 2
+
+        projected_total = away_goals + home_goals
+
+        # ----------------------------------------
+        # NEW: WIN PROBABILITY CALCULATION
+        # ----------------------------------------
+
+        win_prediction = calculate_win_probabilities(
+            away_expected_goals=away_goals,
+            home_expected_goals=home_goals,
+            away_team=away,
+            home_team=home,
+        )
+
+        # ----------------------------------------
+        # GOALIE RELIABILITY — UNCHANGED
+        # ----------------------------------------
 
         statuses = {
             away_starter["status"],
@@ -344,26 +387,59 @@ def build_projections(date, verify=True):
         else:
             reliability = "HIGH"
 
+        # ----------------------------------------
+        # BUILD GAME RECORD
+        # ----------------------------------------
+
         rows.append({
             "Game ID": str(game["id"]),
             "Game Date": date,
+
             "Away Code": away,
             "Home Code": home,
+
             "Away Goalie": away_starter["name"],
             "Home Goalie": home_starter["name"],
+
             "Away Status": away_starter["status"],
             "Home Status": home_starter["status"],
+
             "Away xG": round(away_goals, 4),
             "Home xG": round(home_goals, 4),
+
             "Projected Total": round(
-                away_goals + home_goals,
-                4,
+                projected_total, 4
             ),
+
+            # NEW WINNER FIELDS
+            "Projected Winner": (
+                win_prediction["projected_winner"]
+            ),
+
+            "Away Win Probability": (
+                win_prediction["away_win_probability"]
+            ),
+
+            "Home Win Probability": (
+                win_prediction["home_win_probability"]
+            ),
+
+            "Winner Confidence": (
+                win_prediction["winner_confidence"]
+            ),
+
+            "Regulation Tie Probability": (
+                win_prediction["regulation_tie_probability"]
+            ),
+
             "Goalie Reliability": reliability,
-            "Start ET": start.tz_convert(ET).strftime(
-                "%I:%M %p ET"
-            ),
+
+            "Start ET": start.tz_convert(
+                ET
+            ).strftime("%I:%M %p ET"),
+
             "Start UTC": start.isoformat(),
+
             "Calculated At UTC": now.isoformat(),
         })
 
@@ -391,4 +467,5 @@ def build_projections(date, verify=True):
     }
 
     return projections, metadata
+
 
