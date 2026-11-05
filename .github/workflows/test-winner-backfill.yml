@@ -27,4 +27,4 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          python backfill_winner_predictions.py --date 2026-11-04 --snapshot "FINAL PREGAME" --write
+          python backfill_winner_predictions.py --date 2026-11-03 --snapshot EARLY
