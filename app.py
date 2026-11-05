@@ -361,14 +361,14 @@ def get_supabase_client():
 
 
 @st.cache_data(ttl=120)
-def load_saved_predictions(date):
+def load_saved_predictions(date, model_version):
     client = get_supabase_client()
 
     response = (
         client.table("predictions")
         .select("*")
         .eq("game_date", str(date))
-        .eq("model_version", MODEL_VERSION)
+        .eq("model_version", model_version)
         .execute()
     )
 
@@ -541,6 +541,23 @@ with st.sidebar:
 
 
 # ============================================================
+# PROJECTION MODEL CONTROLS
+# ============================================================
+MODEL_OPTIONS = {
+    "v1_goalie_adjusted": "V1 · Goalie adjusted",
+    "v2_recent5_w20": "V2 · Recent five games (20%)",
+}
+model_left, model_right = st.columns([2, 3], vertical_alignment="bottom")
+with model_left:
+    selected_model = st.selectbox(
+        "Projection model", list(MODEL_OPTIONS),
+        format_func=lambda value: MODEL_OPTIONS[value],
+        key="projection_model_selector",
+    )
+with model_right:
+    st.caption("Live fallback is available for V1 only. V2 displays its saved pregame snapshots; it never substitutes V1 values.")
+
+# ============================================================
 # LOAD DATA
 # ============================================================
 
@@ -557,7 +574,7 @@ except Exception as exc:
 saved_error = None
 
 try:
-    saved_df = load_saved_predictions(date_string)
+    saved_df = load_saved_predictions(date_string, selected_model)
 except Exception as exc:
     saved_df = pd.DataFrame()
     saved_error = str(exc)
@@ -594,492 +611,225 @@ st.caption(
 
 
 # ============================================================
-# LOOKUP TABLES
+# PROJECTION BOARD — RESPONSIVE MATCHUP CARDS
 # ============================================================
-
-saved_lookup = {}
-
-if not saved_df.empty:
-    saved_lookup = {
-        str(row["game_id"]): row
-        for _, row in saved_df.iterrows()
-    }
-
-live_lookup = {}
-
-if not live_df.empty:
-    live_lookup = {
-        str(row["Game ID"]): row
-        for _, row in live_df.iterrows()
-    }
+import math
 
 
-# ============================================================
-# BUILD COMPLETE SLATE
-# ============================================================
+def estimate_win_probabilities(away_goals, home_goals):
+    # Independent Poisson scoring; split regulation ties 50/50.
+    if not all(math.isfinite(x) and x >= 0 for x in (away_goals, home_goals)):
+        return float("nan"), float("nan")
+    def dist(lam):
+        probs = [math.exp(-lam)]
+        for n in range(1, 31):
+            probs.append(probs[-1] * lam / n)
+        z = sum(probs)
+        return [v / z for v in probs]
+    away_dist, home_dist = dist(away_goals), dist(home_goals)
+    away_win = home_win = tied = 0.0
+    for i, pa in enumerate(away_dist):
+        for j, ph in enumerate(home_dist):
+            v = pa * ph
+            if i > j:
+                away_win += v
+            elif j > i:
+                home_win += v
+            else:
+                tied += v
+    return away_win + tied / 2, home_win + tied / 2
+
+
+def value_from(record, name, default=None):
+    if record is None:
+        return default
+    v = record.get(name, default)
+    return default if v is None else v
+
+
+def display_number(value, decimals=2):
+    v = safe_float(value)
+    return f"{v:.{decimals}f}" if math.isfinite(v) else "—"
+
+
+saved_lookup = (
+    {str(row["game_id"]): row for _, row in saved_df.iterrows()}
+    if not saved_df.empty else {}
+)
+live_lookup = (
+    {str(row["Game ID"]): row for _, row in live_df.iterrows()}
+    if not live_df.empty and "Game ID" in live_df.columns else {}
+)
 
 rows = []
 unavailable = []
-
 for game in schedule:
     game_id = str(game.get("id"))
-
-    away = game.get(
-        "awayTeam", {}
-    ).get("abbrev", "")
-
-    home = game.get(
-        "homeTeam", {}
-    ).get("abbrev", "")
-
+    away = game.get("awayTeam", {}).get("abbrev", "")
+    home = game.get("homeTeam", {}).get("abbrev", "")
     status = game_status(game)
-
     saved = saved_lookup.get(game_id)
-    live = live_lookup.get(game_id)
+    live = live_lookup.get(game_id) if selected_model == "v1_goalie_adjusted" else None
 
-    source = None
-
-    if status != "UPCOMING" and saved is not None:
-        source = "SAVED"
-
-    elif status == "UPCOMING" and live is not None:
-        source = "LIVE"
-
+    # Keep final and started games on their original saved pregame forecast.
+    # For upcoming games, show the current live V1 projection if available.
+    if status == "UPCOMING" and live is not None:
+        source = "LIVE PREGAME"
+        away_xg = safe_float(live.get("Away xG"))
+        home_xg = safe_float(live.get("Home xG"))
+        total = safe_float(live.get("Projected Total"))
+        away_goalie = display_text(live.get("Away Goalie"))
+        home_goalie = display_text(live.get("Home Goalie"))
+        away_goalie_status = display_text(live.get("Away Status"))
+        home_goalie_status = display_text(live.get("Home Status"))
+        reliability = display_text(live.get("Goalie Reliability"), "LOW")
+        away_p = home_p = float("nan")
+        projected_winner = None
     elif saved is not None:
-        source = "SAVED"
-
-    elif live is not None:
-        source = "LIVE"
-
-    if source == "SAVED":
-        row = {
-            "Game ID": game_id,
-            "Away Code": away,
-            "Home Code": home,
-
-            "Away xG": safe_float(
-                saved.get("away_projected_goals")
-            ),
-
-            "Home xG": safe_float(
-                saved.get("home_projected_goals")
-            ),
-
-            "Projected Total": safe_float(
-                saved.get("projected_total")
-            ),
-
-            "Away Goalie": display_text(
-                saved.get("away_goalie")
-            ),
-
-            "Home Goalie": display_text(
-                saved.get("home_goalie")
-            ),
-
-            "Away Status": "Pregame",
-            "Home Status": "Pregame",
-
-            "Goalie Reliability": display_text(
-                saved.get("goalie_reliability"),
-                "LOW"
-            ),
-
-            "Game Status": status,
-
-            "Projection Source": display_text(
-                saved.get("snapshot_type")
-            ),
-
-            "Start ET": format_start(
-                game.get("startTimeUTC")
-            ),
-        }
-
-    elif source == "LIVE":
-        row = {
-            "Game ID": game_id,
-            "Away Code": away,
-            "Home Code": home,
-
-            "Away xG": safe_float(
-                live.get("Away xG")
-            ),
-
-            "Home xG": safe_float(
-                live.get("Home xG")
-            ),
-
-            "Projected Total": safe_float(
-                live.get("Projected Total")
-            ),
-
-            "Away Goalie": display_text(
-                live.get("Away Goalie")
-            ),
-
-            "Home Goalie": display_text(
-                live.get("Home Goalie")
-            ),
-
-            "Away Status": display_text(
-                live.get("Away Status")
-            ),
-
-            "Home Status": display_text(
-                live.get("Home Status")
-            ),
-
-            "Goalie Reliability": display_text(
-                live.get("Goalie Reliability"),
-                "LOW"
-            ),
-
-            "Game Status": status,
-            "Projection Source": "LIVE PREGAME",
-
-            "Start ET": format_start(
-                game.get("startTimeUTC")
-            ),
-        }
-
+        source = display_text(saved.get("snapshot_type"), "SAVED")
+        away_xg = safe_float(saved.get("away_projected_goals"))
+        home_xg = safe_float(saved.get("home_projected_goals"))
+        total = safe_float(saved.get("projected_total"))
+        away_goalie = display_text(saved.get("away_goalie"))
+        home_goalie = display_text(saved.get("home_goalie"))
+        away_goalie_status = home_goalie_status = "Pregame snapshot"
+        reliability = display_text(saved.get("goalie_reliability"), "LOW")
+        away_p = safe_float(saved.get("away_win_probability"))
+        home_p = safe_float(saved.get("home_win_probability"))
+        projected_winner = saved.get("projected_winner")
     else:
-        unavailable.append(
-            f"{away} @ {home}: "
-            "no pregame projection available"
-        )
+        unavailable.append(f"{away} @ {home}: no {selected_model} projection available")
         continue
 
-    rows.append(row)
+    if not math.isfinite(total) and all(math.isfinite(v) for v in (away_xg, home_xg)):
+        total = away_xg + home_xg
+    if not all(math.isfinite(v) for v in (away_p, home_p)) or abs(away_p + home_p - 1) > 0.01:
+        away_p, home_p = estimate_win_probabilities(away_xg, home_xg)
+    if math.isfinite(away_p) and math.isfinite(home_p):
+        if math.isclose(away_p, home_p, abs_tol=1e-10, rel_tol=0):
+            projected_winner = "TOSS-UP"
+        else:
+            projected_winner = away if away_p > home_p else home
+    else:
+        projected_winner = "—"
+
+    rows.append({
+        "Game ID": game_id, "Away Code": away, "Home Code": home,
+        "Away xG": away_xg, "Home xG": home_xg, "Projected Total": total,
+        "Away Goalie": away_goalie, "Home Goalie": home_goalie,
+        "Away Status": away_goalie_status, "Home Status": home_goalie_status,
+        "Goalie Reliability": reliability.upper(), "Game Status": status,
+        "Projection Source": source, "Start ET": format_start(game.get("startTimeUTC")),
+        "Start UTC": game.get("startTimeUTC"),
+        "Away Win Probability": away_p, "Home Win Probability": home_p,
+        "Projected Winner": projected_winner,
+    })
 
 df = pd.DataFrame(rows)
-
 if df.empty:
-    st.warning(
-        "No projections are available for this date."
-    )
+    st.warning(f"No {MODEL_OPTIONS[selected_model]} projections are available for this date.")
+    if unavailable:
+        with st.expander("Missing matchups"):
+            for item in unavailable:
+                st.write(item)
     st.stop()
 
-df = (
-    df.sort_values(
-        "Projected Total",
-        ascending=False
-    )
-    .reset_index(drop=True)
+# The board is sorted by total, but start time remains visible on every card.
+df = df.sort_values("Projected Total", ascending=False, na_position="last").reset_index(drop=True)
+reliability_counts = df["Goalie Reliability"].value_counts()
+status_counts = df["Game Status"].value_counts()
+saved_count = int(df["Projection Source"].isin(["EARLY", "FINAL PREGAME"]).sum())
+
+st.html('''
+<style>
+/* Main board uses full available width rather than nested narrow columns. */
+.block-container { max-width: 1520px; padding-left: 1.5rem; padding-right: 1.5rem; }
+.ff-board-heading {font-size:26px;font-weight:900;color:#f3faff;margin:20px 0 5px}
+.ff-board-note {color:#8faec5;font-size:13px;margin-bottom:16px}
+.ff-kpi-grid {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:18px 0 24px}
+.ff-kpi {background:linear-gradient(145deg,#102a41,#071a2c);border:1px solid #24516c;border-radius:14px;padding:17px 20px}
+.ff-kpi-label {font-size:11px;color:#9fbdd1;letter-spacing:1px;text-transform:uppercase}
+.ff-kpi-value {font-size:30px;font-weight:900;color:#f4fbff;margin:4px 0}
+.ff-kpi-sub {font-size:12px;color:#91b5cf}
+.ff-card-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.ff-match-card {min-width:0;border:1px solid #244b66;border-radius:16px;padding:18px 20px;background:linear-gradient(140deg,#0b2439,#071724);box-shadow:0 8px 28px #0002}
+.ff-card-top {display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:16px;color:#9fbcd1;font-size:12px}
+.ff-card-tag {border:1px solid #315e7a;border-radius:99px;padding:5px 10px;color:#b9dff6;white-space:nowrap}
+.ff-match-core {display:grid;grid-template-columns:minmax(0,1fr) minmax(125px,.95fr) minmax(0,1fr);align-items:center;gap:12px;text-align:center}
+.ff-team {min-width:0;display:flex;align-items:center;flex-direction:column;gap:5px}
+.ff-team img {width:64px;height:64px;object-fit:contain}
+.ff-team-code {font-size:22px;font-weight:900;color:#f5fbff}
+.ff-team-goals {font-size:12px;color:#9fc2d9}
+.ff-total-label {font-size:10px;color:#9fbcd1;letter-spacing:.9px;text-transform:uppercase}
+.ff-big-total {font-size:42px;font-weight:900;line-height:1.2;color:#57d3ff}
+.ff-pick {font-size:12px;color:#ccefff;margin-top:7px}
+.ff-pick strong {color:#75e9bd}
+.ff-bar {display:flex;width:100%;height:9px;overflow:hidden;border-radius:10px;background:#16344d;margin:16px 0 5px}
+.ff-away-bar {background:#5b92d2;height:100%}
+.ff-home-bar {background:#3cd5bb;height:100%}
+.ff-prob-labels {display:flex;justify-content:space-between;color:#c6dcec;font-size:12px;font-weight:700}
+.ff-card-bottom {border-top:1px solid #234157;margin-top:14px;padding-top:12px;color:#a6c0d2;font-size:11px;line-height:1.7;overflow-wrap:anywhere}
+.ff-risk {font-weight:800}
+.ff-risk-high {color:#61e6a5}.ff-risk-medium {color:#ffdd74}.ff-risk-low,.ff-risk-blocked {color:#ff899c}
+@media(max-width:1000px){.ff-card-grid{grid-template-columns:1fr}.ff-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:550px){.ff-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.ff-kpi{padding:12px}.ff-kpi-value{font-size:24px}.ff-match-card{padding:14px}.ff-team img{width:48px;height:48px}.ff-team-code{font-size:18px}.ff-big-total{font-size:32px}.ff-match-core{grid-template-columns:minmax(0,1fr) 115px minmax(0,1fr);gap:4px}}
+</style>
+''')
+
+mean_total = df["Projected Total"].mean()
+max_game = df.loc[df["Projected Total"].idxmax()] if df["Projected Total"].notna().any() else None
+low_count = int(reliability_counts.get("LOW", 0))
+upcoming_count = int(status_counts.get("UPCOMING", 0))
+
+st.html(f'''
+<div class="ff-kpi-grid">
+  <div class="ff-kpi"><div class="ff-kpi-label">Projected games</div><div class="ff-kpi-value">{len(df)}</div><div class="ff-kpi-sub">{upcoming_count} upcoming · {int(status_counts.get("LIVE",0))} live · {int(status_counts.get("FINAL",0))} final</div></div>
+  <div class="ff-kpi"><div class="ff-kpi-label">Average goal total</div><div class="ff-kpi-value">{display_number(mean_total)}</div><div class="ff-kpi-sub">Projected goals per matchup</div></div>
+  <div class="ff-kpi"><div class="ff-kpi-label">Highest projected total</div><div class="ff-kpi-value">{display_number(max_game["Projected Total"] if max_game is not None else None)}</div><div class="ff-kpi-sub">{escape(max_game["Away Code"] + " @ " + max_game["Home Code"]) if max_game is not None else "—"}</div></div>
+  <div class="ff-kpi"><div class="ff-kpi-label">Goalie reliability</div><div class="ff-kpi-value">{int(reliability_counts.get("HIGH",0))} high</div><div class="ff-kpi-sub">{int(reliability_counts.get("MEDIUM",0))} medium · {low_count} low · {int(reliability_counts.get("BLOCKED",0))} blocked</div></div>
+</div>
+<div class="ff-board-heading">🏒 Game projections</div>
+<div class="ff-board-note">{escape(MODEL_OPTIONS[selected_model])} · Goal projections and estimated full-game win probabilities · {saved_count} saved pregame snapshots displayed</div>
+''')
+
+cards = []
+for _, game in df.iterrows():
+    away = escape(game["Away Code"])
+    home = escape(game["Home Code"])
+    away_logo = f"https://assets.nhle.com/logos/nhl/svg/{away}_light.svg"
+    home_logo = f"https://assets.nhle.com/logos/nhl/svg/{home}_light.svg"
+    reliability = game["Goalie Reliability"]
+    if reliability not in ("HIGH", "MEDIUM", "LOW", "BLOCKED"):
+        reliability = "LOW"
+    away_p = game["Away Win Probability"]
+    home_p = game["Home Win Probability"]
+    valid_probs = math.isfinite(away_p) and math.isfinite(home_p)
+    away_pct = max(0, min(100, away_p * 100)) if valid_probs else 50
+    home_pct = max(0, min(100, home_p * 100)) if valid_probs else 50
+    winner = escape(game["Projected Winner"])
+    pick = f'<div class="ff-pick">Pick: <strong>{winner}</strong> · {max(away_pct, home_pct):.1f}%</div>' if valid_probs and winner != "TOSS-UP" else '<div class="ff-pick">Projected winner: TOSS-UP</div>' if valid_probs else '<div class="ff-pick">Win probabilities unavailable</div>'
+    cards.append(f'''
+    <article class="ff-match-card">
+      <div class="ff-card-top"><span>{escape(game["Start ET"])} · {escape(game["Game Status"])}</span><span class="ff-card-tag">{escape(game["Projection Source"])}</span></div>
+      <div class="ff-match-core">
+        <div class="ff-team"><img src="{away_logo}" alt="{away} logo"><div class="ff-team-code">{away}</div><div class="ff-team-goals">{display_number(game["Away xG"])} goals</div></div>
+        <div><div class="ff-total-label">Projected total</div><div class="ff-big-total">{display_number(game["Projected Total"])}</div>{pick}</div>
+        <div class="ff-team"><img src="{home_logo}" alt="{home} logo"><div class="ff-team-code">{home}</div><div class="ff-team-goals">{display_number(game["Home xG"])} goals</div></div>
+      </div>
+      <div class="ff-bar"><div class="ff-away-bar" style="width:{away_pct:.2f}%"></div><div class="ff-home-bar" style="width:{home_pct:.2f}%"></div></div>
+      <div class="ff-prob-labels"><span>{away} · {f"{away_pct:.1f}%" if valid_probs else "—"}</span><span>{home} · {f"{home_pct:.1f}%" if valid_probs else "—"}</span></div>
+      <div class="ff-card-bottom">🥅 {escape(game["Away Goalie"])} ({escape(game["Away Status"])}) · {escape(game["Home Goalie"])} ({escape(game["Home Status"])})<br>
+      Goalie reliability: <span class="ff-risk ff-risk-{reliability.lower()}">{reliability}</span></div>
+    </article>''')
+
+st.html('<div class="ff-card-grid">' + ''.join(cards) + '</div>')
+st.caption("Win probabilities use independent Poisson goal distributions and a 50/50 split of regulation ties. They have not been historically calibrated. Goal projections are estimates, not betting recommendations.")
+
+st.download_button(
+    "⬇️ Export game projections CSV", df.to_csv(index=False),
+    file_name=f"frozen_forecast_{selected_model}_{game_date}.csv",
+    mime="text/csv", use_container_width=True,
 )
-
-
-# ============================================================
-# COUNTS
-# ============================================================
-
-reliability_counts = (
-    df["Goalie Reliability"].value_counts()
-)
-
-high = int(
-    reliability_counts.get("HIGH", 0)
-)
-
-medium = int(
-    reliability_counts.get("MEDIUM", 0)
-)
-
-low = int(
-    reliability_counts.get("LOW", 0)
-)
-
-blocked = int(
-    reliability_counts.get("BLOCKED", 0)
-)
-
-status_counts = (
-    df["Game Status"].value_counts()
-)
-
-upcoming = int(
-    status_counts.get("UPCOMING", 0)
-)
-
-in_progress = int(
-    status_counts.get("LIVE", 0)
-)
-
-final = int(
-    status_counts.get("FINAL", 0)
-)
-
-saved_count = int(
-    df["Projection Source"]
-    .isin(["EARLY", "FINAL PREGAME"])
-    .sum()
-)
-
-
-# ============================================================
-# THREE-COLUMN DASHBOARD
-# ============================================================
-
-left, middle, right = st.columns(
-    [1.0, 2.9, 1.15],
-    gap="small"
-)
-
-
-# ============================================================
-# LEFT PANELS
-# ============================================================
-
-with left:
-    st.html(
-        panel(
-            "🏒 TONIGHT'S SLATE",
-            f"""
-            <div class="ff-num">
-                {len(df)} GAMES
-            </div>
-
-            <div class="ff-small">
-                🔵 {upcoming} Upcoming<br>
-                🟡 {in_progress} Live<br>
-                ⚪ {final} Final
-            </div>
-            """
-        )
-    )
-
-    roster_checks = meta.get(
-        "rosters", {}
-    )
-
-    roster_matches = sum(
-        value == "MATCH"
-        for value in roster_checks.values()
-    )
-
-    st.html(
-        panel(
-            "📋 DATA CHECKS",
-            f"""
-            <div class="ff-small">
-                Teams loaded:
-                {meta.get("team_count", 0)}<br>
-
-                Goalies loaded:
-                {meta.get("goalie_count", 0)}<br>
-
-                Official roster matches:
-                {roster_matches} /
-                {len(roster_checks)}<br>
-
-                Scheduled matchups:
-                {len(schedule)}<br>
-
-                Matchups displayed:
-                {len(df)}<br>
-
-                Saved projections displayed:
-                {saved_count}
-            </div>
-            """
-        )
-    )
-
-
-# ============================================================
-# CENTER — NHL MATCHUPS
-# ============================================================
-
-with middle:
-    st.html(
-        panel(
-            "🏒 NHL GOAL PROJECTIONS",
-            ""
-        )
-    )
-
-    game_html = []
-
-    for i, game in df.iterrows():
-        away = escape(
-            game["Away Code"]
-        )
-
-        home = escape(
-            game["Home Code"]
-        )
-
-        logo1 = (
-            "https://assets.nhle.com/"
-            f"logos/nhl/svg/{away}_light.svg"
-        )
-
-        logo2 = (
-            "https://assets.nhle.com/"
-            f"logos/nhl/svg/{home}_light.svg"
-        )
-
-        reliability = str(
-            game["Goalie Reliability"]
-        ).upper()
-
-        if reliability not in (
-            "HIGH",
-            "MEDIUM",
-            "LOW",
-            "BLOCKED"
-        ):
-            reliability = "LOW"
-
-        goalie_text = escape(
-            f'{game["Away Goalie"]} '
-            f'({game["Away Status"]}) / '
-            f'{game["Home Goalie"]} '
-            f'({game["Home Status"]})'
-        )
-
-        status = str(
-            game["Game Status"]
-        )
-
-        start = escape(
-            game["Start ET"]
-        )
-
-        source = escape(
-            game["Projection Source"]
-        )
-
-        game_html.append(
-            f"""
-            <div class="ff-game">
-
-                <div>
-                    <b>{i + 1:02d}</b>
-                </div>
-
-                <div class="ff-small">
-                    {start}
-
-                    <div class="ff-state ff-{status.lower()}">
-                        {escape(status)}
-                    </div>
-                </div>
-
-                <div class="ff-matchup">
-                    <img src="{logo1}" alt="{away}">
-                    <span>{away}</span>
-                    <span>@</span>
-                    <img src="{logo2}" alt="{home}">
-                    <span>{home}</span>
-                </div>
-
-                <div class="ff-shots ff-small">
-                    {game["Away xG"]:.2f} /
-                    {game["Home xG"]:.2f}
-                </div>
-
-                <div class="ff-total">
-                    {game["Projected Total"]:.2f}
-                </div>
-
-                <div class="ff-goalies ff-small">
-                    {goalie_text}
-
-                    <div class="ff-source">
-                        {source}
-                    </div>
-                </div>
-
-                <div class="ff-rel ff-pill ff-{reliability.lower()}">
-                    {reliability}
-                </div>
-
-            </div>
-            """
-        )
-
-    st.html(
-        '<div class="ff-games">'
-        + "".join(game_html)
-        + "</div>"
-    )
-
-
-# ============================================================
-# RIGHT PANELS
-# ============================================================
-
-with right:
-    st.html(
-        panel(
-            "🥅 GOALIE RELIABILITY",
-            f"""
-            <div class="ff-num">
-                {len(df)}
-            </div>
-
-            <div class="ff-small">
-                🟢 High: {high}<br>
-                🟡 Medium: {medium}<br>
-                🔴 Low: {low}<br>
-                ⛔ Blocked: {blocked}
-            </div>
-            """
-        )
-    )
-
-    highest = df.iloc[0]
-    lowest = df.iloc[-1]
-
-    average = (
-        df["Projected Total"].mean()
-    )
-
-    st.html(
-        panel(
-            "🎯 KEY TAKEAWAYS",
-            f"""
-            <div class="ff-small">
-
-                Average projected total:
-                <b>{average:.2f}</b>
-
-                <br><br>
-
-                Highest:
-                <b>
-                    {highest["Projected Total"]:.2f}
-                </b>
-
-                ({escape(highest["Away Code"])}
-                @ {escape(highest["Home Code"])})
-
-                <br><br>
-
-                Lowest:
-                <b>
-                    {lowest["Projected Total"]:.2f}
-                </b>
-
-                ({escape(lowest["Away Code"])}
-                @ {escape(lowest["Home Code"])})
-
-            </div>
-            """
-        )
-    )
-
-    st.download_button(
-        "⬇️ Export projections CSV",
-        data=df.to_csv(index=False),
-        file_name=(
-            f"frozen_forecast_{game_date}.csv"
-        ),
-        mime="text/csv",
-        use_container_width=True
-    )
-
 
 # ============================================================
 # HISTORICAL DATABASE
