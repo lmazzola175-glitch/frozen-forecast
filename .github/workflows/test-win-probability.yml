@@ -1,0 +1,70 @@
+
+name: Test NHL Win Probability Engine
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "win_probability.py"
+      - ".github/workflows/test-win-probability.yml"
+
+jobs:
+  test-win-probability:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Test win probability calculations
+        run: |
+          python win_probability.py
+
+      - name: Run additional probability tests
+        run: |
+          python - <<'PY'
+          from win_probability import calculate_win_probabilities
+
+          cases = [
+              (3.4, 2.8, "NYR", "BOS"),
+              (2.5, 2.5, "TOR", "MTL"),
+              (4.0, 2.0, "COL", "CHI"),
+              (1.5, 3.5, "ANA", "DAL"),
+          ]
+
+          for away_xg, home_xg, away, home in cases:
+              result = calculate_win_probabilities(
+                  away_xg,
+                  home_xg,
+                  away,
+                  home,
+              )
+
+              away_p = result["away_win_probability"]
+              home_p = result["home_win_probability"]
+
+              assert 0 <= away_p <= 1
+              assert 0 <= home_p <= 1
+              assert abs(away_p + home_p - 1) < 0.00001
+
+              if away_xg > home_xg:
+                  assert result["projected_winner"] == away
+              elif home_xg > away_xg:
+                  assert result["projected_winner"] == home
+              else:
+                  assert result["projected_winner"] == "TOSS-UP"
+
+              print(
+                  f"{away} @ {home} | "
+                  f"Away: {away_p:.1%} | "
+                  f"Home: {home_p:.1%} | "
+                  f"Winner: {result['projected_winner']}"
+              )
+
+          print("ALL WIN PROBABILITY TESTS PASSED")
+          PY
