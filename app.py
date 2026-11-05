@@ -693,7 +693,16 @@ for game in schedule:
         away_goalie = display_text(saved.get("away_goalie"))
         home_goalie = display_text(saved.get("home_goalie"))
         away_goalie_status = home_goalie_status = "Pregame snapshot"
-        reliability = display_text(saved.get("goalie_reliability"), "UNKNOWN")
+        # Historical snapshots may contain a legacy LOW value without the
+        # underlying goalie confirmation statuses. Do not present that as
+        # verified evidence of unconfirmed starters.
+        saved_away_status = display_text(saved.get("away_goalie_status"), "UNKNOWN").upper()
+        saved_home_status = display_text(saved.get("home_goalie_status"), "UNKNOWN").upper()
+        known_statuses = {"CONFIRMED", "LIKELY", "UNCONFIRMED"}
+        if saved_away_status in known_statuses and saved_home_status in known_statuses:
+            reliability = display_text(saved.get("goalie_reliability"), "UNKNOWN")
+        else:
+            reliability = "UNKNOWN"
         away_p = safe_float(saved.get("away_win_probability"))
         home_p = safe_float(saved.get("home_win_probability"))
         projected_winner = saved.get("projected_winner")
@@ -734,8 +743,13 @@ if df.empty:
                 st.write(item)
     st.stop()
 
-# The board is sorted by total, but start time remains visible on every card.
-df = df.sort_values("Projected Total", ascending=False, na_position="last").reset_index(drop=True)
+# Display games chronologically by puck drop, not projected goal total.
+# UTC timestamps sort correctly across time zones and date boundaries.
+df["_sort_start_utc"] = pd.to_datetime(df["Start UTC"], utc=True, errors="coerce")
+df = df.sort_values(
+    ["_sort_start_utc", "Away Code", "Home Code"],
+    ascending=[True, True, True], na_position="last"
+).drop(columns="_sort_start_utc").reset_index(drop=True)
 reliability_counts = df["Goalie Reliability"].value_counts()
 status_counts = df["Game Status"].value_counts()
 saved_count = int(df["Projection Source"].isin(["EARLY", "FINAL PREGAME"]).sum())
@@ -750,21 +764,21 @@ st.html('''
 .ff-kpi-label {font-size:10px;color:#9fbdd1;letter-spacing:.7px;text-transform:uppercase}
 .ff-kpi-value {font-size:26px;font-weight:900;color:#f4fbff;margin:2px 0}
 .ff-kpi-sub {font-size:11px;color:#91b5cf}
-.ff-scoreboard {display:flex;flex-direction:column;gap:6px}
-.ff-score-row {display:grid;grid-template-columns:100px minmax(190px,1.4fr) 96px minmax(155px,1fr) minmax(120px,.9fr) 95px;gap:12px;align-items:center;padding:10px 14px;background:#0a2033;border:1px solid #24455e;border-radius:10px;min-height:78px}
+.ff-scoreboard {display:flex;flex-direction:column;gap:4px}
+.ff-score-row {display:grid;grid-template-columns:100px minmax(190px,1.4fr) 96px minmax(155px,1fr) minmax(120px,.9fr) 95px;gap:10px;align-items:center;padding:6px 12px;background:#0a2033;border:1px solid #24455e;border-radius:9px;min-height:64px}
 .ff-score-row:hover {background:#102b43;border-color:#3b789e}
 .ff-small {font-size:10px;color:#9fbad0}
 .ff-time {font-size:12px;color:#e5f4ff;font-weight:750}
-.ff-teams {display:flex;flex-direction:column;gap:5px}
+.ff-teams {display:flex;flex-direction:column;gap:2px}
 .ff-team-line {display:flex;align-items:center;gap:9px;font-size:13px;color:#e8f6ff;font-weight:800;white-space:nowrap}
-.ff-team-line img {width:24px;height:24px;object-fit:contain}
+.ff-team-line img {width:21px;height:21px;object-fit:contain}
 .ff-goals {margin-left:auto;color:#9ddaff;font-size:13px;font-variant-numeric:tabular-nums}
-.ff-total {font-size:27px;font-weight:900;color:#54d2ff;line-height:1.1}
+.ff-total {font-size:25px;font-weight:900;color:#54d2ff;line-height:1.1}
 .ff-winner {font-size:13px;font-weight:850;color:#86f0c8}
 .ff-prob {display:flex;width:100%;height:6px;overflow:hidden;border-radius:6px;background:#16344d;margin:5px 0}
 .ff-away-bar {background:#629ce2}.ff-home-bar {background:#35cbb5}
 .ff-prob-legend {display:flex;justify-content:space-between;font-size:10px;color:#c2d9e9}
-.ff-goalie {font-size:11px;color:#bbd1e0;line-height:1.45;overflow-wrap:anywhere}
+.ff-goalie {font-size:10px;color:#bbd1e0;line-height:1.25;overflow-wrap:anywhere}
 .ff-status {font-size:10px;color:#9fc1d8}
 .ff-risk {font-weight:850;font-size:11px}
 .ff-risk-high {color:#61e6a5}.ff-risk-medium {color:#ffdd74}.ff-risk-low,.ff-risk-blocked {color:#ff899c}.ff-risk-unknown {color:#9fbad0}
@@ -784,7 +798,7 @@ st.html(f'''
   <div class="ff-kpi"><div class="ff-kpi-label">Projected games</div><div class="ff-kpi-value">{len(df)}</div><div class="ff-kpi-sub">{upcoming_count} upcoming · {int(status_counts.get("LIVE",0))} live · {int(status_counts.get("FINAL",0))} final</div></div>
   <div class="ff-kpi"><div class="ff-kpi-label">Average goal total</div><div class="ff-kpi-value">{display_number(mean_total)}</div><div class="ff-kpi-sub">Projected goals per matchup</div></div>
   <div class="ff-kpi"><div class="ff-kpi-label">Highest projected total</div><div class="ff-kpi-value">{display_number(max_game["Projected Total"] if max_game is not None else None)}</div><div class="ff-kpi-sub">{escape(max_game["Away Code"] + " @ " + max_game["Home Code"]) if max_game is not None else "—"}</div></div>
-  <div class="ff-kpi"><div class="ff-kpi-label">Goalie reliability</div><div class="ff-kpi-value">{int(reliability_counts.get("HIGH",0))} high</div><div class="ff-kpi-sub">{int(reliability_counts.get("MEDIUM",0))} medium · {low_count} low · {int(reliability_counts.get("BLOCKED",0))} blocked</div></div>
+  <div class="ff-kpi"><div class="ff-kpi-label">Goalie reliability</div><div class="ff-kpi-value">{int(reliability_counts.get("HIGH",0))} high</div><div class="ff-kpi-sub">{int(reliability_counts.get("MEDIUM",0))} medium · {low_count} low · {int(reliability_counts.get("UNKNOWN",0))} unknown</div></div>
 </div>
 <div class="ff-board-heading">🏒 Game projections</div>
 <div class="ff-board-note">{escape(MODEL_OPTIONS[selected_model])} · Goal projections and estimated full-game win probabilities · {saved_count} saved pregame snapshots displayed</div>
@@ -831,6 +845,7 @@ for _, game in df.iterrows():
 
 st.html('''<div class="ff-score-header"><span>Start / source</span><span>Matchup / projected goals</span><span>Projected total</span><span>Winner probability</span><span>Starting goalies</span><span>Reliability</span></div>''' + '<div class="ff-scoreboard">' + ''.join(score_rows) + '</div>')
 
+st.caption("UNKNOWN goalie reliability means the saved snapshot lacks verifiable starter-confirmation statuses; it does not imply an unconfirmed goalie.")
 st.caption("Win probabilities use independent Poisson goal distributions and a 50/50 split of regulation ties. They have not been historically calibrated. Goal projections are estimates, not betting recommendations.")
 
 st.download_button(
@@ -2108,6 +2123,11 @@ if unavailable:
     ):
         for matchup in unavailable:
             st.write(matchup)
+
+
+
+
+
 
 
 
