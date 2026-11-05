@@ -1,12 +1,12 @@
 
-"""Frozen Forecast — NHL win probability engine.
+"""Frozen Forecast — NHL Win Probability Engine.
 
-Estimates regulation scoring with independent Poisson distributions.
-A regulation tie is split 50/50 as a neutral approximation for
-overtime/shootout outcomes.
+Estimates regulation scoring using independent Poisson distributions.
 
-This is an initial probability model, not yet calibrated to
-historical NHL game results.
+Regulation ties are split 50/50 as an initial approximation
+for overtime and shootout outcomes.
+
+This model is not yet calibrated against historical NHL results.
 """
 
 import math
@@ -14,10 +14,13 @@ import math
 
 def poisson_probabilities(expected_goals, max_goals=30):
     """Return a normalized Poisson goal distribution."""
+
     expected_goals = float(expected_goals)
 
     if not math.isfinite(expected_goals) or expected_goals < 0:
-        raise ValueError("Expected goals must be finite and nonnegative.")
+        raise ValueError(
+            "Expected goals must be finite and nonnegative."
+        )
 
     probabilities = [math.exp(-expected_goals)]
 
@@ -29,9 +32,14 @@ def poisson_probabilities(expected_goals, max_goals=30):
     total = sum(probabilities)
 
     if total <= 0:
-        raise ValueError("Could not construct goal distribution.")
+        raise ValueError(
+            "Could not construct goal distribution."
+        )
 
-    return [probability / total for probability in probabilities]
+    return [
+        probability / total
+        for probability in probabilities
+    ]
 
 
 def calculate_win_probabilities(
@@ -40,18 +48,34 @@ def calculate_win_probabilities(
     away_team,
     home_team,
 ):
-    """Estimate full-game win probabilities including a tie approximation."""
+    """Estimate full-game win probabilities.
 
-    away_distribution = poisson_probabilities(away_expected_goals)
-    home_distribution = poisson_probabilities(home_expected_goals)
+    Uses Poisson scoring probabilities and a neutral
+    50/50 overtime/shootout approximation.
+    """
+
+    away_distribution = poisson_probabilities(
+        away_expected_goals
+    )
+
+    home_distribution = poisson_probabilities(
+        home_expected_goals
+    )
 
     away_regulation_win = 0.0
     home_regulation_win = 0.0
     regulation_tie = 0.0
 
-    for away_goals, away_probability in enumerate(away_distribution):
-        for home_goals, home_probability in enumerate(home_distribution):
-            probability = away_probability * home_probability
+    # Calculate regulation outcomes.
+    for away_goals, away_probability in enumerate(
+        away_distribution
+    ):
+        for home_goals, home_probability in enumerate(
+            home_distribution
+        ):
+            probability = (
+                away_probability * home_probability
+            )
 
             if away_goals > home_goals:
                 away_regulation_win += probability
@@ -64,29 +88,53 @@ def calculate_win_probabilities(
 
     # Neutral overtime/shootout approximation.
     away_win_probability = (
-        away_regulation_win + 0.5 * regulation_tie
+        away_regulation_win
+        + 0.5 * regulation_tie
     )
 
     home_win_probability = (
-        home_regulation_win + 0.5 * regulation_tie
+        home_regulation_win
+        + 0.5 * regulation_tie
     )
 
-    total = away_win_probability + home_win_probability
+    # Normalize probabilities.
+    total = (
+        away_win_probability
+        + home_win_probability
+    )
 
     away_win_probability /= total
     home_win_probability /= total
 
-    projected_winner = (
-        away_team
-        if away_win_probability > home_win_probability
-        else home_team
-        if home_win_probability > away_win_probability
-        else "TOSS-UP"
+    # FIX: Handle equal probabilities safely.
+    # Floating-point calculations can produce tiny
+    # differences even when expected goals are equal.
+    if math.isclose(
+        away_win_probability,
+        home_win_probability,
+        rel_tol=0,
+        abs_tol=1e-10,
+    ):
+        projected_winner = "TOSS-UP"
+
+    elif away_win_probability > home_win_probability:
+        projected_winner = away_team
+
+    else:
+        projected_winner = home_team
+
+    winner_confidence = max(
+        away_win_probability,
+        home_win_probability,
     )
 
     return {
-        "away_win_probability": round(away_win_probability, 6),
-        "home_win_probability": round(home_win_probability, 6),
+        "away_win_probability": round(
+            away_win_probability, 6
+        ),
+        "home_win_probability": round(
+            home_win_probability, 6
+        ),
         "away_regulation_win_probability": round(
             away_regulation_win, 6
         ),
@@ -98,32 +146,65 @@ def calculate_win_probabilities(
         ),
         "projected_winner": projected_winner,
         "winner_confidence": round(
-            max(away_win_probability, home_win_probability), 6
+            winner_confidence, 6
         ),
     }
 
 
+# ============================================================
+# TEST THE ENGINE
+# ============================================================
+
 if __name__ == "__main__":
-    example = calculate_win_probabilities(
-        away_expected_goals=3.4,
-        home_expected_goals=2.8,
-        away_team="NYR",
-        home_team="BOS",
-    )
 
-    print("FROZEN FORECAST — WIN PROBABILITY TEST")
-    print("=" * 45)
+    test_cases = [
+        (3.4, 2.8, "NYR", "BOS"),
+        (2.5, 2.5, "TOR", "MTL"),
+        (4.0, 2.0, "COL", "CHI"),
+        (1.5, 3.5, "ANA", "DAL"),
+    ]
 
-    for key, value in example.items():
-        print(f"{key}: {value}")
+    print("=" * 55)
+    print("FROZEN FORECAST — WIN PROBABILITY ENGINE TEST")
+    print("=" * 55)
 
-    assert abs(
-        example["away_win_probability"]
-        + example["home_win_probability"]
-        - 1.0
-    ) < 0.00001
+    for away_xg, home_xg, away, home in test_cases:
 
-    assert example["projected_winner"] == "NYR"
+        result = calculate_win_probabilities(
+            away_expected_goals=away_xg,
+            home_expected_goals=home_xg,
+            away_team=away,
+            home_team=home,
+        )
 
-    print("=" * 45)
-    print("WIN PROBABILITY TEST PASSED")
+        away_p = result["away_win_probability"]
+        home_p = result["home_win_probability"]
+
+        # Validate probabilities.
+        assert 0 <= away_p <= 1
+        assert 0 <= home_p <= 1
+
+        assert abs(
+            away_p + home_p - 1
+        ) < 0.00001
+
+        # Validate projected winner.
+        if away_xg > home_xg:
+            assert result["projected_winner"] == away
+
+        elif home_xg > away_xg:
+            assert result["projected_winner"] == home
+
+        else:
+            assert result["projected_winner"] == "TOSS-UP"
+
+        print(
+            f"{away} @ {home} | "
+            f"Away: {away_p:.1%} | "
+            f"Home: {home_p:.1%} | "
+            f"Winner: {result['projected_winner']}"
+        )
+
+    print("=" * 55)
+    print("ALL WIN PROBABILITY TESTS PASSED")
+    print("=" * 55)
