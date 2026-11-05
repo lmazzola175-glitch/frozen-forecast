@@ -1,4 +1,5 @@
 
+
 import html
 import os
 from datetime import datetime
@@ -1975,6 +1976,270 @@ else:
 
 
 # ============================================================
+# WINNER PREDICTION ACCURACY TRACKER
+# ============================================================
+
+@st.cache_data(ttl=600)
+def load_winner_prediction_records():
+    """Read frozen predictions and final scores; never update either."""
+    client = get_supabase_client()
+
+    def fetch_all(table_name, columns="*"):
+        records = []
+        page_size = 1000
+        for offset in range(0, 100000, page_size):
+            response = (
+                client.table(table_name)
+                .select(columns)
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            batch = response.data or []
+            records.extend(batch)
+            if len(batch) < page_size:
+                break
+        return pd.DataFrame(records)
+
+    predictions = fetch_all("predictions")
+    if predictions.empty:
+        return pd.DataFrame(), "No saved predictions yet."
+
+    required_predictions = {
+        "game_id", "game_date", "model_version", "snapshot_type",
+        "away_team", "home_team", "away_win_probability",
+        "home_win_probability", "projected_winner",
+    }
+    missing = required_predictions - set(predictions.columns)
+    if missing:
+        return pd.DataFrame(), (
+            "Prediction fields missing: " + ", ".join(sorted(missing))
+        )
+
+    # The score table name can be overridden in Streamlit secrets.
+    # Try common names for compatibility with existing Supabase setups.
+    configured = st.secrets.get(
+        "RESULTS_TABLE", os.environ.get("RESULTS_TABLE", "")
+    )
+    candidates = list(dict.fromkeys(
+        [name for name in (configured, "results", "game_results", "nhl_results") if name]
+    ))
+    scores = None
+    errors = []
+    for table_name in candidates:
+        try:
+            candidate = fetch_all(table_name)
+            if candidate.empty:
+                scores = candidate
+                break
+            if {"game_id", "away_goals", "home_goals"}.issubset(candidate.columns):
+                scores = candidate
+                break
+            errors.append(f"{table_name}: missing game_id/away_goals/home_goals")
+        except Exception as exc:
+            errors.append(f"{table_name}: {exc}")
+
+    if scores is None:
+        return pd.DataFrame(), (
+            "Could not find the completed-game score table. "
+            "Set RESULTS_TABLE in Streamlit secrets to its exact name. "
+            + " | ".join(errors)
+        )
+    if scores.empty:
+        return pd.DataFrame(), "Waiting for completed-game scores."
+
+    scores = scores.copy()
+    scores["game_id"] = scores["game_id"].astype(str)
+    scores["away_goals"] = pd.to_numeric(scores["away_goals"], errors="coerce")
+    scores["home_goals"] = pd.to_numeric(scores["home_goals"], errors="coerce")
+    scores = scores.dropna(subset=["away_goals", "home_goals"])
+    if "updated_at" in scores.columns:
+        scores = scores.sort_values("updated_at")
+    scores = scores.drop_duplicates("game_id", keep="last")
+
+    predictions = predictions.copy()
+    predictions["game_id"] = predictions["game_id"].astype(str)
+    for col in ("away_win_probability", "home_win_probability"):
+        predictions[col] = pd.to_numeric(predictions[col], errors="coerce")
+    if "saved_at" in predictions.columns:
+        predictions = predictions.sort_values("saved_at")
+    predictions = predictions.drop_duplicates(
+        ["game_id", "model_version", "snapshot_type"], keep="last"
+    )
+
+    joined = predictions.merge(
+        scores[["game_id", "away_goals", "home_goals"]],
+        on="game_id", how="inner", validate="many_to_one"
+    )
+    if joined.empty:
+        return pd.DataFrame(), "No completed games match saved predictions yet."
+
+    # NHL official final scores include OT/SO winners. Do not infer a
+    # winner from tied scores, if such a record is accidentally present.
+    joined = joined.loc[joined["away_goals"] != joined["home_goals"]].copy()
+    joined = joined.dropna(subset=["away_win_probability", "home_win_probability"])
+    joined = joined.loc[
+        joined["away_win_probability"].between(0, 1)
+        & joined["home_win_probability"].between(0, 1)
+        & ((joined["away_win_probability"] + joined["home_win_probability"] - 1).abs() < 0.01)
+    ].copy()
+    if joined.empty:
+        return pd.DataFrame(), "Completed scores exist, but no valid winner probabilities match."
+
+    joined["actual_winner"] = np.where(
+        joined["away_goals"] > joined["home_goals"],
+        joined["away_team"], joined["home_team"]
+    )
+    joined["actual_away_win"] = (
+        joined["actual_winner"] == joined["away_team"]
+    ).astype(int)
+    joined["winner_correct"] = np.where(
+        joined["projected_winner"].isin(["TOSS-UP", "TIE", ""])
+        | joined["projected_winner"].isna(),
+        np.nan,
+        (joined["projected_winner"] == joined["actual_winner"]).astype(float)
+    )
+    joined["brier_score"] = (
+        joined["away_win_probability"] - joined["actual_away_win"]
+    ) ** 2
+    joined["matchup"] = joined["away_team"] + " @ " + joined["home_team"]
+    return joined, None
+
+
+st.divider()
+st.html('''
+<div class="ff-section-title">🏆 WINNER PREDICTION ACCURACY</div>
+''')
+st.caption(
+    "Compare frozen NHL winner picks against official final scores. "
+    "Brier score measures probability accuracy (lower is better). "
+    "Only completed games with saved probabilities are included."
+)
+
+try:
+    winner_records, winner_message = load_winner_prediction_records()
+except Exception as exc:
+    winner_records = pd.DataFrame()
+    winner_message = f"Unable to load winner accuracy: {exc}"
+
+if winner_records.empty:
+    st.info(winner_message or "No completed winner predictions available yet.")
+else:
+    winner_models = sorted(winner_records["model_version"].dropna().unique().tolist())
+    winner_stages = [
+        x for x in ("FINAL PREGAME", "EARLY")
+        if x in set(winner_records["snapshot_type"].dropna())
+    ]
+    if not winner_stages:
+        st.info("No EARLY or FINAL PREGAME winner predictions are available.")
+    else:
+        stage = st.selectbox(
+            "Winner prediction snapshot", winner_stages,
+            key="winner_accuracy_stage"
+        )
+        staged = winner_records.loc[
+            winner_records["snapshot_type"].eq(stage)
+        ].copy()
+
+        # Fair comparison: every displayed model uses the same games.
+        if len(winner_models) > 1:
+            game_sets = [
+                set(staged.loc[staged["model_version"].eq(m), "game_id"])
+                for m in winner_models
+            ]
+            common_games = set.intersection(*game_sets) if game_sets else set()
+            comparison_rows = staged.loc[staged["game_id"].isin(common_games)].copy()
+        else:
+            comparison_rows = staged.copy()
+            common_games = set(comparison_rows["game_id"])
+
+        st.markdown("#### Model Winner Accuracy — Matched Games")
+        if comparison_rows.empty:
+            st.info("No completed games have valid winner probabilities for every model at this stage.")
+        else:
+            summaries = []
+            for model, group in comparison_rows.groupby("model_version"):
+                graded = group.dropna(subset=["winner_correct"])
+                summaries.append({
+                    "Model": model,
+                    "Matched games": group["game_id"].nunique(),
+                    "Graded picks": len(graded),
+                    "Correct picks": int(graded["winner_correct"].sum()),
+                    "Win accuracy": graded["winner_correct"].mean() if len(graded) else np.nan,
+                    "Brier score": group["brier_score"].mean(),
+                })
+            summary_df = pd.DataFrame(summaries).sort_values("Brier score")
+            st.dataframe(
+                summary_df.style.format({
+                    "Win accuracy": "{:.1%}", "Brier score": "{:.4f}"
+                }, na_rep="—"),
+                use_container_width=True, hide_index=True
+            )
+            st.caption(
+                f"Matched sample: {len(common_games)} completed games. "
+                "TOSS-UP predictions are ungraded for winner accuracy, "
+                "but still contribute to Brier score."
+            )
+
+        st.markdown("#### Individual Winner Predictions")
+        selected_winner_model = st.selectbox(
+            "Model to inspect", winner_models, key="winner_accuracy_model"
+        )
+        individual = staged.loc[
+            staged["model_version"].eq(selected_winner_model)
+        ].copy()
+        if individual.empty:
+            st.info("No completed winner predictions for this model and snapshot.")
+        else:
+            graded = individual.dropna(subset=["winner_correct"])
+            w1, w2, w3, w4 = st.columns(4)
+            w1.metric("Completed games", f"{len(individual):,}")
+            w2.metric("Correct picks", f"{int(graded['winner_correct'].sum()):,} / {len(graded):,}")
+            w3.metric(
+                "Winner accuracy",
+                f"{graded['winner_correct'].mean():.1%}" if len(graded) else "—"
+            )
+            w4.metric("Brier score", f"{individual['brier_score'].mean():.4f}")
+
+            individual["Result"] = individual["winner_correct"].map(
+                {1.0: "CORRECT", 0.0: "INCORRECT"}
+            ).fillna("TOSS-UP")
+            individual["Away win %"] = 100 * individual["away_win_probability"]
+            individual["Home win %"] = 100 * individual["home_win_probability"]
+            individual["Final score"] = (
+                individual["away_goals"].astype(int).astype(str) + "–"
+                + individual["home_goals"].astype(int).astype(str)
+            )
+            show_columns = [
+                "game_date", "matchup", "Final score", "projected_winner",
+                "actual_winner", "Away win %", "Home win %", "Result", "brier_score"
+            ]
+            visible = individual[show_columns].rename(columns={
+                "game_date": "Date", "matchup": "Matchup",
+                "projected_winner": "Projected winner",
+                "actual_winner": "Actual winner", "brier_score": "Brier score"
+            }).sort_values(["Date", "Matchup"], ascending=[False, True])
+            st.dataframe(
+                visible.style.format({
+                    "Away win %": "{:.1f}%", "Home win %": "{:.1f}%",
+                    "Brier score": "{:.4f}"
+                }),
+                use_container_width=True, hide_index=True
+            )
+            st.download_button(
+                "⬇️ Export Winner Accuracy CSV",
+                data=visible.to_csv(index=False),
+                file_name=f"frozen_forecast_winners_{selected_winner_model}_{stage.replace(' ', '_')}.csv",
+                mime="text/csv", use_container_width=True
+            )
+
+st.caption(
+    "Win probabilities use a Poisson scoring model with a 50/50 split "
+    "of regulation ties. These probabilities are not yet historically calibrated. "
+    "Winner accuracy and goal-total MAE measure different prediction tasks."
+)
+
+
+# ============================================================
 # METHODOLOGY
 # ============================================================
 
@@ -1998,6 +2263,9 @@ if unavailable:
     ):
         for matchup in unavailable:
             st.write(matchup)
+
+
+
 
 
 
