@@ -764,27 +764,28 @@ st.html('''
 .ff-kpi-label {font-size:10px;color:#9fbdd1;letter-spacing:.7px;text-transform:uppercase}
 .ff-kpi-value {font-size:26px;font-weight:900;color:#f4fbff;margin:2px 0}
 .ff-kpi-sub {font-size:11px;color:#91b5cf}
-.ff-scoreboard {display:flex;flex-direction:column;gap:4px}
-.ff-score-row {display:grid;grid-template-columns:100px minmax(190px,1.4fr) 96px minmax(155px,1fr) minmax(120px,.9fr) 95px;gap:10px;align-items:center;padding:6px 12px;background:#0a2033;border:1px solid #24455e;border-radius:9px;min-height:86px}
+.ff-scoreboard {display:flex;flex-direction:column;gap:4px;width:100%;min-width:0}
+.ff-score-row {display:grid;grid-template-columns:105px minmax(205px,1.3fr) 100px minmax(185px,1fr) minmax(145px,.75fr) 80px;gap:8px;align-items:center;padding:6px 12px;background:#0a2033;border:1px solid #24455e;border-radius:9px;min-height:98px}
+.ff-score-row > div {min-width:0}
 .ff-score-row:hover {background:#102b43;border-color:#3b789e}
 .ff-small {font-size:10px;color:#9fbad0}
 .ff-time {font-size:12px;color:#e5f4ff;font-weight:750}
 .ff-teams {display:flex;flex-direction:column;gap:3px}
-.ff-team-line {display:flex;align-items:center;gap:11px;font-size:13px;color:#e8f6ff;font-weight:800;white-space:nowrap}
-.ff-team-line img {width:34px;height:34px;min-width:34px;object-fit:contain;display:block;flex-shrink:0}
+.ff-team-line {display:flex;align-items:center;gap:9px;font-size:13px;color:#e8f6ff;font-weight:800;white-space:nowrap}
+.ff-team-line img {width:42px;height:42px;min-width:42px;object-fit:contain;display:block;flex-shrink:0}
 .ff-goals {margin-left:auto;color:#9ddaff;font-size:13px;font-variant-numeric:tabular-nums}
 .ff-total {font-size:25px;font-weight:900;color:#54d2ff;line-height:1.1}
 .ff-winner {font-size:13px;font-weight:850;color:#86f0c8}
 .ff-prob {display:flex;width:100%;height:6px;overflow:hidden;border-radius:6px;background:#16344d;margin:5px 0}
 .ff-away-bar {background:#629ce2}.ff-home-bar {background:#35cbb5}
 .ff-prob-legend {display:flex;justify-content:space-between;font-size:10px;color:#c2d9e9}
-.ff-goalie {font-size:10px;color:#bbd1e0;line-height:1.25;overflow-wrap:anywhere}
+.ff-goalie {font-size:11px;color:#bbd1e0;line-height:1.25;overflow-wrap:anywhere}
 .ff-status {font-size:10px;color:#9fc1d8}
 .ff-risk {font-weight:850;font-size:11px}
 .ff-risk-high {color:#61e6a5}.ff-risk-medium {color:#ffdd74}.ff-risk-low,.ff-risk-blocked {color:#ff899c}.ff-risk-unknown {color:#9fbad0}
-.ff-score-header {display:grid;grid-template-columns:100px minmax(190px,1.4fr) 96px minmax(155px,1fr) minmax(120px,.9fr) 95px;gap:12px;padding:0 14px 5px;color:#86a9c2;font-size:10px;text-transform:uppercase;letter-spacing:.6px}
-@media(max-width:1050px){.ff-score-header{display:none}.ff-score-row{grid-template-columns:75px minmax(150px,1fr) 80px minmax(135px,1fr);gap:9px}.ff-goalie,.ff-risk-cell{grid-column:span 2}.ff-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:600px){.ff-score-row{grid-template-columns:65px minmax(115px,1fr) 72px;gap:7px;padding:10px}.ff-win-cell{grid-column:2 / 4}.ff-goalie,.ff-risk-cell{grid-column:1 / 4}.ff-team-line{font-size:12px;gap:7px}.ff-team-line img{width:28px;height:28px;min-width:28px}.ff-total{font-size:23px}.ff-kpi{padding:10px}.ff-kpi-value{font-size:23px}}
+.ff-score-header {display:grid;grid-template-columns:105px minmax(205px,1.3fr) 100px minmax(185px,1fr) minmax(145px,.75fr) 80px;gap:8px;padding:0 14px 5px;color:#86a9c2;font-size:10px;text-transform:uppercase;letter-spacing:.6px}
+@media(max-width:900px){.ff-score-header{display:none}.ff-score-row{grid-template-columns:75px minmax(150px,1fr) 80px minmax(135px,1fr);gap:9px}.ff-goalie,.ff-risk-cell{grid-column:span 2}.ff-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px){.ff-score-row{grid-template-columns:65px minmax(115px,1fr) 72px;gap:7px;padding:10px}.ff-win-cell{grid-column:2 / 4}.ff-goalie,.ff-risk-cell{grid-column:1 / 4}.ff-team-line{font-size:12px;gap:7px}.ff-team-line img{width:32px;height:32px;min-width:32px}.ff-total{font-size:23px}.ff-kpi{padding:10px}.ff-kpi-value{font-size:23px}}
 </style>
 ''')
 
@@ -2123,6 +2124,17 @@ if unavailable:
     ):
         for matchup in unavailable:
             st.write(matchup)
+
+
+
+
+
+
+
+
+
+
+
 
 
 
