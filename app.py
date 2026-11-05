@@ -2140,45 +2140,132 @@ else:
             winner_records["snapshot_type"].eq(stage)
         ].copy()
 
-        # Fair comparison: every displayed model uses the same games.
-        if len(winner_models) > 1:
-            game_sets = [
-                set(staged.loc[staged["model_version"].eq(m), "game_id"])
-                for m in winner_models
-            ]
-            common_games = set.intersection(*game_sets) if game_sets else set()
-            comparison_rows = staged.loc[staged["game_id"].isin(common_games)].copy()
-        else:
-            comparison_rows = staged.copy()
-            common_games = set(comparison_rows["game_id"])
+        # Overall performance: each model uses ALL its completed games
+        # for the selected snapshot, not just games shared with other models.
+        st.markdown("#### Overall Historical Winner Accuracy")
+        st.caption(
+            "Each model is evaluated on all its available completed games "
+            "for this snapshot. Sample sizes may differ."
+        )
 
-        st.markdown("#### Model Winner Accuracy — Matched Games")
-        if comparison_rows.empty:
-            st.info("No completed games have valid winner probabilities for every model at this stage.")
+        overall_rows = []
+        for model, group in staged.groupby("model_version"):
+            group = group.drop_duplicates("game_id")
+            graded = group.dropna(subset=["winner_correct"])
+            overall_rows.append({
+                "Model": model,
+                "Completed games": group["game_id"].nunique(),
+                "Graded picks": len(graded),
+                "Correct picks": int(graded["winner_correct"].sum()),
+                "Win accuracy": graded["winner_correct"].mean() if len(graded) else np.nan,
+                "Brier score": group["brier_score"].mean(),
+            })
+
+        overall_df = pd.DataFrame(overall_rows).sort_values(
+            ["Brier score", "Completed games"], ascending=[True, False]
+        )
+        st.dataframe(
+            overall_df.style.format({
+                "Win accuracy": "{:.1%}", "Brier score": "{:.4f}"
+            }, na_rep="—"),
+            use_container_width=True, hide_index=True,
+        )
+        st.caption(
+            "Brier score: lower is better; 0.25 is the benchmark for a "
+            "constant 50/50 forecast in a balanced binary outcome. "
+            "These are descriptive results, not evidence of calibrated probabilities."
+        )
+
+        # Fair head-to-head: restrict both models to the exact same game IDs.
+        st.markdown("#### Head-to-Head Winner Accuracy — Shared Games")
+        if len(winner_models) < 2:
+            st.info("At least two models are needed for a head-to-head comparison.")
         else:
-            summaries = []
-            for model, group in comparison_rows.groupby("model_version"):
-                graded = group.dropna(subset=["winner_correct"])
-                summaries.append({
-                    "Model": model,
-                    "Matched games": group["game_id"].nunique(),
-                    "Graded picks": len(graded),
-                    "Correct picks": int(graded["winner_correct"].sum()),
-                    "Win accuracy": graded["winner_correct"].mean() if len(graded) else np.nan,
-                    "Brier score": group["brier_score"].mean(),
-                })
-            summary_df = pd.DataFrame(summaries).sort_values("Brier score")
-            st.dataframe(
-                summary_df.style.format({
-                    "Win accuracy": "{:.1%}", "Brier score": "{:.4f}"
-                }, na_rep="—"),
-                use_container_width=True, hide_index=True
-            )
-            st.caption(
-                f"Matched sample: {len(common_games)} completed games. "
-                "TOSS-UP predictions are ungraded for winner accuracy, "
-                "but still contribute to Brier score."
-            )
+            h2h_first, h2h_second = st.columns(2)
+            with h2h_first:
+                first_winner_model = st.selectbox(
+                    "First model", winner_models,
+                    index=winner_models.index("v1_goalie_adjusted")
+                    if "v1_goalie_adjusted" in winner_models else 0,
+                    key="winner_h2h_first",
+                )
+            with h2h_second:
+                second_winner_model = st.selectbox(
+                    "Second model", winner_models,
+                    index=winner_models.index("v2_recent5_w20")
+                    if "v2_recent5_w20" in winner_models else min(1, len(winner_models) - 1),
+                    key="winner_h2h_second",
+                )
+
+            if first_winner_model == second_winner_model:
+                st.info("Select two different models for a fair comparison.")
+            else:
+                first_games = set(staged.loc[
+                    staged["model_version"].eq(first_winner_model), "game_id"
+                ])
+                second_games = set(staged.loc[
+                    staged["model_version"].eq(second_winner_model), "game_id"
+                ])
+                common_games = first_games & second_games
+                paired_rows = staged.loc[
+                    staged["game_id"].isin(common_games)
+                    & staged["model_version"].isin([first_winner_model, second_winner_model])
+                ].copy()
+                paired_rows = paired_rows.drop_duplicates(["game_id", "model_version"])
+
+                if paired_rows.empty:
+                    st.info("No completed games are shared by these models at this snapshot stage.")
+                else:
+                    head_rows = []
+                    for model in [first_winner_model, second_winner_model]:
+                        group = paired_rows.loc[paired_rows["model_version"].eq(model)]
+                        graded = group.dropna(subset=["winner_correct"])
+                        head_rows.append({
+                            "Model": model,
+                            "Shared games": len(common_games),
+                            "Graded picks": len(graded),
+                            "Correct picks": int(graded["winner_correct"].sum()),
+                            "Win accuracy": graded["winner_correct"].mean() if len(graded) else np.nan,
+                            "Brier score": group["brier_score"].mean(),
+                        })
+                    head_df = pd.DataFrame(head_rows)
+                    st.dataframe(
+                        head_df.style.format({
+                            "Win accuracy": "{:.1%}", "Brier score": "{:.4f}"
+                        }, na_rep="—"),
+                        use_container_width=True, hide_index=True,
+                    )
+                    st.caption(
+                        f"Fair comparison: {len(common_games)} identical completed games. "
+                        "TOSS-UP picks are excluded from win accuracy but included in Brier score. "
+                        "A small shared sample cannot establish which model is superior."
+                    )
+
+                    comparison_detail = paired_rows[[
+                        "game_id", "game_date", "matchup", "model_version",
+                        "projected_winner", "actual_winner", "winner_correct",
+                        "away_win_probability", "brier_score"
+                    ]].copy()
+                    comparison_detail["Pick result"] = comparison_detail["winner_correct"].map(
+                        {1.0: "CORRECT", 0.0: "INCORRECT"}
+                    ).fillna("TOSS-UP")
+                    comparison_detail["Away win %"] = (
+                        comparison_detail["away_win_probability"] * 100
+                    )
+                    comparison_detail = comparison_detail.rename(columns={
+                        "game_date": "Date", "matchup": "Matchup",
+                        "model_version": "Model", "projected_winner": "Predicted winner",
+                        "actual_winner": "Actual winner", "brier_score": "Brier score",
+                    })
+                    st.markdown("##### Shared Game Predictions")
+                    st.dataframe(
+                        comparison_detail[[
+                            "Date", "Matchup", "Model", "Predicted winner",
+                            "Actual winner", "Pick result", "Away win %", "Brier score"
+                        ]].sort_values(["Date", "Matchup", "Model"], ascending=[False, True, True])
+                        .style.format({"Away win %": "{:.1f}%", "Brier score": "{:.4f}"}),
+                        use_container_width=True, hide_index=True,
+                    )
 
         st.markdown("#### Individual Winner Predictions")
         selected_winner_model = st.selectbox(
@@ -2263,8 +2350,6 @@ if unavailable:
     ):
         for matchup in unavailable:
             st.write(matchup)
-
-
 
 
 
