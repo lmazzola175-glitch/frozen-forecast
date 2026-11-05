@@ -1,4 +1,5 @@
 
+
 """Frozen Forecast — Automated Pregame Prediction Collector.
 
 Supports:
@@ -12,10 +13,13 @@ Features:
 - Duplicate prevention
 - Freshness and pregame validation
 - No overwriting existing predictions
+- Projected winners and win probabilities
 """
 
 import argparse
+import math
 import os
+
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -36,6 +40,104 @@ MODELS = {
 }
 
 
+# ============================================================
+# VALIDATE WINNER PREDICTIONS
+# ============================================================
+
+def validate_winner_prediction(game):
+    """Validate winner fields before saving to Supabase."""
+
+    away_team = str(game["Away Code"])
+    home_team = str(game["Home Code"])
+
+    projected_winner = str(game["Projected Winner"])
+
+    away_probability = float(
+        game["Away Win Probability"]
+    )
+
+    home_probability = float(
+        game["Home Win Probability"]
+    )
+
+    winner_confidence = float(
+        game["Winner Confidence"]
+    )
+
+    values = [
+        away_probability,
+        home_probability,
+        winner_confidence,
+    ]
+
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError(
+            "Win probabilities must be finite."
+        )
+
+    if not all(0 <= value <= 1 for value in values):
+        raise ValueError(
+            "Win probabilities must be between 0 and 1."
+        )
+
+    if not math.isclose(
+        away_probability + home_probability,
+        1.0,
+        rel_tol=0,
+        abs_tol=0.00001,
+    ):
+        raise ValueError(
+            "Home and away probabilities must sum to 1."
+        )
+
+    expected_confidence = max(
+        away_probability,
+        home_probability,
+    )
+
+    if not math.isclose(
+        winner_confidence,
+        expected_confidence,
+        rel_tol=0,
+        abs_tol=0.00001,
+    ):
+        raise ValueError(
+            "Winner confidence does not match probabilities."
+        )
+
+    if math.isclose(
+        away_probability,
+        home_probability,
+        rel_tol=0,
+        abs_tol=0.00001,
+    ):
+        expected_winner = "TOSS-UP"
+
+    elif away_probability > home_probability:
+        expected_winner = away_team
+
+    else:
+        expected_winner = home_team
+
+    if projected_winner != expected_winner:
+        raise ValueError(
+            f"Projected winner mismatch: "
+            f"expected {expected_winner}, "
+            f"received {projected_winner}"
+        )
+
+    return {
+        "projected_winner": projected_winner,
+        "away_win_probability": away_probability,
+        "home_win_probability": home_probability,
+        "winner_confidence": winner_confidence,
+    }
+
+
+# ============================================================
+# COLLECT ELIGIBLE PREGAME PREDICTIONS
+# ============================================================
+
 def collect_eligible_predictions(
     df,
     model_version,
@@ -48,6 +150,7 @@ def collect_eligible_predictions(
     eligible = []
 
     for _, game in df.iterrows():
+
         game_id = str(game["Game ID"])
 
         start = pd.to_datetime(
@@ -108,37 +211,66 @@ def collect_eligible_predictions(
             print(f"SKIP {game_id}: {reason}")
             continue
 
-        eligible.append({
+        # Validate the new winner probability fields.
+        try:
+            winner_fields = validate_winner_prediction(
+                game
+            )
+
+        except (ValueError, KeyError, TypeError) as exc:
+            print(
+                f"SKIP {game_id}: invalid winner prediction "
+                f"({exc})"
+            )
+            continue
+
+        record = {
             "game_id": game_id,
             "game_date": game_date,
             "model_version": model_version,
             "snapshot_type": snapshot_type,
             "saved_at": calculated.isoformat(),
             "scheduled_start": start.isoformat(),
+
             "away_team": str(game["Away Code"]),
             "home_team": str(game["Home Code"]),
+
             "away_projected_goals": float(
                 game["Away xG"]
             ),
+
             "home_projected_goals": float(
                 game["Home xG"]
             ),
+
             "projected_total": float(
                 game["Projected Total"]
             ),
+
             "away_goalie": str(
                 game["Away Goalie"]
             ),
+
             "home_goalie": str(
                 game["Home Goalie"]
             ),
+
             "goalie_reliability": str(
                 game["Goalie Reliability"]
             ),
-        })
+        }
+
+        # Add winner predictions to the Supabase record.
+        record.update(winner_fields)
+
+        eligible.append(record)
 
     return eligible
 
+
+# ============================================================
+# SAVE PREDICTIONS WITHOUT OVERWRITING HISTORY
+# ============================================================
 
 def save_predictions(
     client,
@@ -176,6 +308,7 @@ def save_predictions(
     skipped = 0
 
     for record in eligible:
+
         game_id = record["game_id"]
 
         if game_id in existing:
@@ -236,10 +369,14 @@ def save_predictions(
                 f"{snapshot_type} | "
                 f"{record['away_team']} @ "
                 f"{record['home_team']} | "
-                f"{record['projected_total']:.2f}"
+                f"Total: {record['projected_total']:.2f} | "
+                f"Winner: {record['projected_winner']} | "
+                f"Confidence: "
+                f"{record['winner_confidence']:.1%}"
             )
 
         except Exception as exc:
+
             message = str(exc).lower()
 
             if (
@@ -257,7 +394,12 @@ def save_predictions(
     return saved, skipped
 
 
+# ============================================================
+# MAIN COLLECTOR
+# ============================================================
+
 def main():
+
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
@@ -302,10 +444,12 @@ def main():
 
     print(f"Date: {game_date} ET")
     print(f"Snapshot: {snapshot_type}")
+
     print(
         f"Operation: "
         f"{'WRITE' if args.write else 'DRY RUN'}"
     )
+
     print(f"Model selection: {args.model}")
 
     if args.model == "v1":
@@ -324,6 +468,7 @@ def main():
     client = None
 
     if args.write:
+
         from supabase import create_client
 
         url = os.environ.get("SUPABASE_URL")
@@ -341,11 +486,13 @@ def main():
     failed_models = []
 
     for model_version, builder in selected_models.items():
+
         print("\n" + "=" * 65)
         print(f"RUNNING MODEL: {model_version}")
         print("=" * 65)
 
         try:
+
             df, meta = builder(
                 game_date,
                 verify=True,
@@ -380,10 +527,16 @@ def main():
             )
 
             for record in eligible:
+
                 print(
                     f"{record['away_team']} @ "
                     f"{record['home_team']} | "
-                    f"{record['projected_total']:.2f} | "
+                    f"Total: {record['projected_total']:.2f} | "
+                    f"Winner: {record['projected_winner']} | "
+                    f"Away: "
+                    f"{record['away_win_probability']:.1%} | "
+                    f"Home: "
+                    f"{record['home_win_probability']:.1%} | "
                     f"{record['game_id']}"
                 )
 
@@ -410,6 +563,7 @@ def main():
             )
 
         except Exception as exc:
+
             failed_models.append(model_version)
 
             print(
