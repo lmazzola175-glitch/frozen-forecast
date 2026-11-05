@@ -3,14 +3,44 @@ name: Frozen Forecast Collector
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Which snapshot to collect"
+        required: true
+        default: "early"
+        type: choice
+        options:
+          - early
+          - final
+
+      operation:
+        description: "Dry run or save predictions"
+        required: true
+        default: "dry-run"
+        type: choice
+        options:
+          - dry-run
+          - write
+
+      model:
+        description: "Which model to run"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - v1
+          - v2
+
   schedule:
-    # EARLY: 9 AM EST / 10 AM EDT
+    # EARLY: 9 AM EDT
+    - cron: "0 13 * * *"
+
+    # EARLY: 9 AM EST
     - cron: "0 14 * * *"
 
-    # FINAL PREGAME: every 15 minutes, UTC afternoon/evening
+    # FINAL PREGAME: every 15 minutes
     - cron: "*/15 17-23 * * *"
-
-    # FINAL PREGAME: every 15 minutes, UTC overnight
     - cron: "*/15 0-6 * * *"
 
 permissions:
@@ -37,18 +67,66 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Save EARLY pregame predictions
-        if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 14 * * *'
+      - name: Determine collection settings
+        id: settings
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_OPERATION: ${{ inputs.operation }}
+          INPUT_MODEL: ${{ inputs.model }}
+        shell: bash
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "mode=$INPUT_MODE" >> "$GITHUB_OUTPUT"
+            echo "operation=$INPUT_OPERATION" >> "$GITHUB_OUTPUT"
+            echo "model=$INPUT_MODEL" >> "$GITHUB_OUTPUT"
+
+          elif [ "$SCHEDULE" = "0 13 * * *" ] || \
+               [ "$SCHEDULE" = "0 14 * * *" ]; then
+
+            # Only collect EARLY at 9 AM New York time.
+            CURRENT_HOUR=$(TZ=America/New_York date +%H)
+
+            if [ "$CURRENT_HOUR" = "09" ]; then
+              echo "mode=early" >> "$GITHUB_OUTPUT"
+              echo "operation=write" >> "$GITHUB_OUTPUT"
+              echo "model=all" >> "$GITHUB_OUTPUT"
+            else
+              echo "mode=skip" >> "$GITHUB_OUTPUT"
+            fi
+
+          else
+            echo "mode=final" >> "$GITHUB_OUTPUT"
+            echo "operation=write" >> "$GITHUB_OUTPUT"
+            echo "model=all" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Show collection settings
+        run: |
+          echo "Mode: ${{ steps.settings.outputs.mode }}"
+          echo "Operation: ${{ steps.settings.outputs.operation }}"
+          echo "Model: ${{ steps.settings.outputs.model }}"
+
+      - name: Run Frozen Forecast collector
+        if: steps.settings.outputs.mode != 'skip'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python collect_predictions.py --mode early --write
+          COLLECTION_MODE: ${{ steps.settings.outputs.mode }}
+          COLLECTION_OPERATION: ${{ steps.settings.outputs.operation }}
+          COLLECTION_MODEL: ${{ steps.settings.outputs.model }}
+        shell: bash
+        run: |
+          ARGS=(--mode "$COLLECTION_MODE" --model "$COLLECTION_MODEL")
 
-      - name: Save FINAL PREGAME predictions
-        if: github.event_name == 'workflow_dispatch' || github.event.schedule != '0 14 * * *'
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python collect_predictions.py --mode final --write
+          if [ "$COLLECTION_OPERATION" = "write" ]; then
+            ARGS+=(--write)
+          fi
 
+          python collect_predictions.py "${ARGS[@]}"
+
+      - name: Collection complete
+        if: success()
+        run: echo "Frozen Forecast collector finished successfully."
 
