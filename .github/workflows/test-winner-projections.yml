@@ -1,0 +1,147 @@
+
+name: Test V1 and V2 Winner Projections
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-winner-projections:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas requests beautifulsoup4
+
+      - name: Test both projection engines
+        run: |
+          python - <<'PY'
+          from datetime import datetime, timedelta
+          from zoneinfo import ZoneInfo
+          import pandas as pd
+
+          import engine
+          import engine_v2
+
+          ET = ZoneInfo("America/New_York")
+          today = datetime.now(ET).date()
+
+          # Look ahead for a date with upcoming games.
+          selected_date = None
+
+          for offset in range(0, 8):
+              date = (
+                  today + timedelta(days=offset)
+              ).isoformat()
+
+              games = engine.fetch_schedule(date)
+
+              if any(
+                  pd.to_datetime(
+                      game.get("startTimeUTC"),
+                      utc=True,
+                      errors="coerce",
+                  ) > pd.Timestamp.now(tz="UTC")
+                  for game in games
+              ):
+                  selected_date = date
+                  break
+
+          if selected_date is None:
+              raise RuntimeError(
+                  "No upcoming NHL games found in the next 8 days."
+              )
+
+          print("TEST DATE:", selected_date)
+
+          for name, module in [
+              ("V1", engine),
+              ("V2", engine_v2),
+          ]:
+              print("=" * 55)
+              print("TESTING", name)
+              print("=" * 55)
+
+              df, meta = module.build_projections(
+                  selected_date,
+                  verify=True,
+              )
+
+              print("Scheduled:", meta.get("scheduled"))
+              print("Projected:", len(df))
+              print("Skipped:", meta.get("skipped", []))
+
+              if df.empty:
+                  raise AssertionError(
+                      f"{name} produced no projections."
+                  )
+
+              required = [
+                  "Away xG",
+                  "Home xG",
+                  "Projected Total",
+                  "Projected Winner",
+                  "Away Win Probability",
+                  "Home Win Probability",
+                  "Winner Confidence",
+              ]
+
+              for column in required:
+                  assert column in df.columns, (
+                      f"{name} missing column: {column}"
+                  )
+
+              for _, row in df.iterrows():
+                  away = float(
+                      row["Away Win Probability"]
+                  )
+                  home = float(
+                      row["Home Win Probability"]
+                  )
+
+                  assert 0 <= away <= 1
+                  assert 0 <= home <= 1
+
+                  assert abs(
+                      away + home - 1
+                  ) < 0.00001
+
+                  assert abs(
+                      float(row["Away xG"])
+                      + float(row["Home xG"])
+                      - float(row["Projected Total"])
+                  ) < 0.001
+
+                  winner = row["Projected Winner"]
+
+                  if abs(away - home) < 0.00001:
+                      assert winner == "TOSS-UP"
+                  elif away > home:
+                      assert winner == row["Away Code"]
+                  else:
+                      assert winner == row["Home Code"]
+
+                  print(
+                      f"{row['Away Code']} @ "
+                      f"{row['Home Code']} | "
+                      f"Total: {row['Projected Total']:.2f} | "
+                      f"Winner: {winner} | "
+                      f"Away: {away:.1%} | "
+                      f"Home: {home:.1%}"
+                  )
+
+              print(name, "PASSED")
+
+          print("=" * 55)
+          print("ALL V1 AND V2 WINNER PROJECTION TESTS PASSED")
+          print("=" * 55)
+          PY
