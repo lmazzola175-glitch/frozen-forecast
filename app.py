@@ -2369,7 +2369,7 @@ def render_live_dashboard():
             "predictions",
             "game_id,game_date,model_version,snapshot_type,saved_at,"
             "projected_total,away_win_probability,home_win_probability,"
-            "away_team,home_team,"
+            "away_team,home_team,goalie_reliability,"
             "over_5_5_probability,under_5_5_probability,"
             "over_6_0_probability,under_6_0_probability,push_6_0_probability,"
             "over_6_5_probability,under_6_5_probability",
@@ -2506,6 +2506,146 @@ def render_live_dashboard():
                                 )
                             elif len(shared_ids) < 100:
                                 st.info("Still below 100 shared completed games; rankings may change.")
+
+                            # ========================================================
+                            # MODEL DIAGNOSTICS LAB — descriptive, frozen-only
+                            # ========================================================
+                            st.divider()
+                            st.html('<div class="ff-section-title">🔬 MODEL DIAGNOSTICS LAB</div>')
+                            st.caption(
+                                "Explore where saved pregame forecasts missed. All models use the "
+                                "same completed games selected above. These are descriptive "
+                                "in-sample patterns, not validated model improvements."
+                            )
+
+                            diagnostic = paired_lab.copy()
+                            diagnostic["Projected total band"] = pd.cut(
+                                diagnostic["projected_total"],
+                                bins=[-np.inf, 5.5, 6.5, np.inf],
+                                labels=["Below 5.5", "5.5 to 6.5", "Above 6.5"],
+                                right=False,
+                            ).astype(str)
+                            diagnostic["Actual scoring band"] = pd.cut(
+                                diagnostic["actual_total"],
+                                bins=[-np.inf, 6, 8, np.inf],
+                                labels=["0–5 goals", "6–7 goals", "8+ goals"],
+                                right=False,
+                            ).astype(str)
+                            diagnostic["Goalie reliability"] = (
+                                diagnostic["goalie_reliability"].fillna("UNKNOWN")
+                                .astype(str).str.strip().str.upper().replace("", "UNKNOWN")
+                            )
+                            diagnostic["Week"] = diagnostic["game_date"].dt.to_period("W").astype(str)
+
+                            def diagnostic_summary(frame, category):
+                                grouped = frame.groupby(["model_version", category], observed=True)
+                                result = grouped.agg(
+                                    Games=("game_id", "nunique"),
+                                    MAE=("absolute_error", "mean"),
+                                    Bias=("error", "mean"),
+                                    RMSE=("squared_error", lambda values: float(np.sqrt(values.mean()))),
+                                    Winner_accuracy=("winner_correct", "mean"),
+                                ).reset_index()
+                                result["Winner accuracy %"] = result.pop("Winner_accuracy") * 100
+                                return result.rename(columns={"model_version": "Model", category: "Segment"})
+
+                            segment_type = st.selectbox(
+                                "Break down forecast errors by",
+                                ["Projected total band", "Goalie reliability", "Week", "Actual scoring band"],
+                                key="ff_diagnostics_segment",
+                            )
+                            if segment_type == "Actual scoring band":
+                                st.info(
+                                    "Actual scoring bands use the final result, which is unknown before "
+                                    "puck drop. Use this only to diagnose misses, never as a pregame filter."
+                                )
+                            if segment_type == "Goalie reliability":
+                                st.caption(
+                                    "UNKNOWN means the saved snapshot does not establish a reliability "
+                                    "category; it does not mean the starting goalie was unconfirmed."
+                                )
+                            breakdown = diagnostic_summary(diagnostic, segment_type)
+                            st.dataframe(
+                                breakdown.style.format({
+                                    "MAE": "{:.3f}", "Bias": "{:+.3f}",
+                                    "RMSE": "{:.3f}", "Winner accuracy %": "{:.1f}",
+                                }, na_rep="—"),
+                                use_container_width=True, hide_index=True,
+                            )
+                            st.caption(
+                                "Games is the number of distinct completed matchups per model and segment. "
+                                "Small segments are especially noisy. Bias is projected minus actual."
+                            )
+
+                            st.markdown("#### Fixed-line over/under diagnostics")
+                            line_choice = st.selectbox(
+                                "Hypothetical total-goals line", [5.5, 6.0, 6.5],
+                                key="ff_diagnostics_line",
+                            )
+                            fixed = diagnostic.copy()
+                            fixed["Actual outcome"] = np.select(
+                                [fixed["actual_total"] > line_choice,
+                                 fixed["actual_total"] < line_choice],
+                                ["OVER", "UNDER"], default="PUSH",
+                            )
+                            # Only V3 probability columns are eligible for probability-based calls.
+                            key = str(line_choice).replace(".", "_")
+                            over_col, under_col = f"over_{key}_probability", f"under_{key}_probability"
+                            fixed["Model call"] = "UNAVAILABLE"
+                            if over_col in fixed.columns and under_col in fixed.columns:
+                                over_p = pd.to_numeric(fixed[over_col], errors="coerce")
+                                under_p = pd.to_numeric(fixed[under_col], errors="coerce")
+                                available = over_p.between(0, 1) & under_p.between(0, 1)
+                                fixed.loc[available, "Model call"] = np.where(
+                                    over_p[available] >= under_p[available], "OVER", "UNDER"
+                                )
+                            fixed["Correct non-push call"] = np.where(
+                                (fixed["Model call"] != "UNAVAILABLE") &
+                                (fixed["Actual outcome"] != "PUSH"),
+                                (fixed["Model call"] == fixed["Actual outcome"]).astype(float),
+                                np.nan,
+                            )
+                            fixed_summary = fixed.groupby("model_version").agg(
+                                Games=("game_id", "nunique"),
+                                Over_games=("Actual outcome", lambda x: int((x == "OVER").sum())),
+                                Under_games=("Actual outcome", lambda x: int((x == "UNDER").sum())),
+                                Pushes=("Actual outcome", lambda x: int((x == "PUSH").sum())),
+                                Graded_calls=("Correct non-push call", "count"),
+                                Call_accuracy=("Correct non-push call", "mean"),
+                            ).reset_index().rename(columns={"model_version": "Model"})
+                            fixed_summary["Call accuracy %"] = fixed_summary.pop("Call_accuracy") * 100
+                            st.dataframe(
+                                fixed_summary.style.format({"Call accuracy %": "{:.1f}"}, na_rep="—"),
+                                use_container_width=True, hide_index=True,
+                            )
+                            st.caption(
+                                "Only saved V3 Over/Under probabilities determine a model call. "
+                                "V1/V2 show no graded calls rather than inventing probabilities. "
+                                "Pushes are excluded from call accuracy. These are hypothetical fixed "
+                                "lines, not recorded sportsbook prices or betting ROI."
+                            )
+                            st.markdown("#### Largest total-goals misses")
+                            worst = diagnostic.sort_values("absolute_error", ascending=False).head(15)
+                            st.dataframe(
+                                worst[["game_date", "away_team", "home_team", "model_version",
+                                       "projected_total", "actual_total", "error", "absolute_error",
+                                       "Goalie reliability"]],
+                                use_container_width=True, hide_index=True,
+                            )
+                            st.download_button(
+                                "⬇️ Export diagnostic game data",
+                                diagnostic[["game_id", "game_date", "model_version", "snapshot_type",
+                                            "away_team", "home_team", "projected_total", "actual_total",
+                                            "error", "absolute_error", "Goalie reliability",
+                                            "Projected total band", "Actual scoring band", "Week"]].to_csv(index=False),
+                                file_name="frozen_forecast_diagnostics.csv",
+                                mime="text/csv", key="ff_diagnostics_export",
+                            )
+                            st.info(
+                                "Rest/back-to-back breakdown is not yet included: historical rest "
+                                "status is not stored in the prediction records used here. "
+                                "We should join verified historical schedule data before adding it."
+                            )
 
                             st.markdown("#### Total-goals error by model")
                             st.bar_chart(summary_lab.set_index("Model")[["Total MAE"]])
