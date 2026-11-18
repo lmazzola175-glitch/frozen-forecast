@@ -46,4 +46,4 @@ jobs:
           if [[ "$WRITE_ENABLED" == "true" ]]; then
             ARGS+=(--write)
           fi
-          python collect_v3_experiments_write.py "${ARGS[@]}"
+          python collect_v3_experiments_scheduled.py "${ARGS[@]}"
