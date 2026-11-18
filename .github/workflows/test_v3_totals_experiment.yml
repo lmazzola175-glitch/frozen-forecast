@@ -1,0 +1,80 @@
+name: Test Frozen Forecast V3 Totals Experiment
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-v3-totals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Compile experimental engine
+        run: python -m py_compile engine_v3_totals_experiment.py
+      - name: Verify totals scale without external API calls
+        run: |
+          python - <<'PY'
+          import pandas as pd
+          from engine_v3_totals_experiment import apply_scaled_totals, TOTALS_SCALE
+          from over_under_probability import calculate_total_probabilities
+          original = pd.DataFrame([{
+              'Away Code': 'AAA', 'Home Code': 'BBB',
+              'Away xG': 3.4, 'Home xG': 2.8,
+              'Projected Total': 6.2,
+              'Away Win Probability': 0.56, 'Home Win Probability': 0.44,
+              'Projected Winner': 'AAA',
+          }])
+          before = original.copy(deep=True)
+          updated = apply_scaled_totals(original)
+          assert original.equals(before), 'Baseline was mutated'
+          assert updated.at[0, 'Projected Total'] == 6.2
+          assert updated.at[0, 'Away xG'] == 3.4
+          assert updated.at[0, 'Home xG'] == 2.8
+          assert updated.at[0, 'Away Win Probability'] == 0.56
+          assert updated.at[0, 'Home Win Probability'] == 0.44
+          assert abs(updated.at[0, 'Totals Probability Mean'] - 6.2*TOTALS_SCALE) < 1e-9
+          expected = calculate_total_probabilities(3.4*TOTALS_SCALE, 2.8*TOTALS_SCALE)
+          for line in (5.5, 6.0, 6.5):
+              probs = [float(updated.at[0, f'{side} {line} Probability']) for side in ('Over','Under','Push')]
+              assert abs(sum(probs) - 1) < 2e-6
+              assert all(0 <= p <= 1 for p in probs)
+              for side, value in zip(('over','under','push'), probs):
+                  assert abs(value - expected[line][side+'_probability']) < 1e-6
+              print(f'Line {line}: OVER={probs[0]:.1%}, UNDER={probs[1]:.1%}, PUSH={probs[2]:.1%}')
+          assert updated.at[0, 'Over 6.0 Probability'] == updated.at[0, 'Over 6.5 Probability']
+          assert updated.at[0, 'Push 5.5 Probability'] == 0
+          assert updated.at[0, 'Push 6.5 Probability'] == 0
+          print('SCALED TOTALS UNIT TEST PASSED')
+          PY
+      - name: Test live projections (read-only)
+        run: |
+          python - <<'PY'
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          from engine_v3_totals_experiment import build_projections
+          day = datetime.now(ZoneInfo('America/New_York')).date().isoformat()
+          df, meta = build_projections(day)
+          print('Date:', day)
+          print('Model:', meta['model_version'])
+          print('Projected games:', len(df))
+          if df.empty:
+              print('No eligible pregame games: live integration NOT VERIFIED')
+          else:
+              for _, row in df.iterrows():
+                  for line in (5.5, 6.0, 6.5):
+                      total = sum(float(row[f'{side} {line} Probability']) for side in ('Over','Under','Push'))
+                      assert abs(total-1) < 0.00001
+                  print(f"{row['Away Code']} @ {row['Home Code']} | base total={row['Projected Total']:.2f} | scaled probability mean={row['Totals Probability Mean']:.2f} | OVER 5.5={row['Over 5.5 Probability']:.1%} | OVER 6.5={row['Over 6.5 Probability']:.1%}")
+              print('V3 TOTALS LIVE TEST PASSED')
+          print('NO DATABASE WRITES')
+          PY
