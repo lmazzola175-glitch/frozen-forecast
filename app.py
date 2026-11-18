@@ -2338,6 +2338,194 @@ def render_live_dashboard():
 
 
     # ============================================================
+    # FIVE-MODEL PERFORMANCE LAB — FROZEN SNAPSHOTS ONLY
+    # ============================================================
+    st.divider()
+    st.html('<div class="ff-section-title">🏒 FIVE-MODEL PERFORMANCE LAB</div>')
+    st.caption(
+        "Compare V1, V2 and the V3 challengers on identical completed games. "
+        "Uses saved pregame snapshots only; never live or retrospectively generated projections. "
+        "No paid odds feed or sportsbook lines required."
+    )
+
+    try:
+        client = get_supabase_client()
+
+        def fetch_lab_table(table, columns, sort_column):
+            records = []
+            for offset in range(0, 50000, 1000):
+                response = (
+                    client.table(table).select(columns)
+                    .order(sort_column, desc=True)
+                    .range(offset, offset + 999).execute()
+                )
+                batch = response.data or []
+                records.extend(batch)
+                if len(batch) < 1000:
+                    break
+            return pd.DataFrame(records)
+
+        frozen = fetch_lab_table(
+            "predictions",
+            "game_id,game_date,model_version,snapshot_type,saved_at,"
+            "projected_total,away_win_probability,home_win_probability,"
+            "away_team,home_team,"
+            "over_5_5_probability,under_5_5_probability,"
+            "over_6_0_probability,under_6_0_probability,push_6_0_probability,"
+            "over_6_5_probability,under_6_5_probability",
+            "game_date",
+        )
+        outcomes = fetch_lab_table(
+            "game_results", "game_id,game_date,away_goals,home_goals,actual_total", "game_date"
+        )
+
+        if frozen.empty or outcomes.empty:
+            st.info("Waiting for saved snapshots and completed NHL results.")
+        else:
+            frozen["game_id"] = frozen["game_id"].astype(str)
+            outcomes["game_id"] = outcomes["game_id"].astype(str)
+            outcomes = outcomes.drop_duplicates("game_id")
+            lab = frozen.merge(
+                outcomes[["game_id", "away_goals", "home_goals", "actual_total"]],
+                on="game_id", how="inner", validate="many_to_one"
+            )
+            lab["game_date"] = pd.to_datetime(lab["game_date"], errors="coerce")
+            for field in ["projected_total", "actual_total", "away_win_probability",
+                          "home_win_probability", "away_goals", "home_goals"]:
+                lab[field] = pd.to_numeric(lab[field], errors="coerce")
+            lab = lab.dropna(subset=["game_date", "projected_total", "actual_total"])
+            lab = lab.loc[lab["model_version"].astype(str).str.startswith(("v1_", "v2_", "v3_"))]
+
+            if lab.empty:
+                st.info("No completed games with V1/V2/V3 frozen predictions yet.")
+            else:
+                stages = [x for x in ("FINAL PREGAME", "EARLY") if x in set(lab["snapshot_type"])]
+                if not stages:
+                    st.info("No recognized pregame snapshot stages yet.")
+                else:
+                    a, b = st.columns([1, 2])
+                    with a:
+                        lab_stage = st.selectbox("Snapshot stage", stages, key="lab_stage")
+                    stage_data = lab.loc[lab["snapshot_type"] == lab_stage].copy()
+                    stage_data = stage_data.sort_values("saved_at").drop_duplicates(
+                        ["game_id", "model_version"], keep="first"
+                    )
+                    model_choices = sorted(stage_data["model_version"].dropna().unique().tolist())
+                    with b:
+                        selected_models = st.multiselect(
+                            "Models to compare", model_choices, default=model_choices,
+                            key="lab_models"
+                        )
+                    if not selected_models:
+                        st.info("Select at least one model.")
+                    else:
+                        chosen = stage_data.loc[stage_data["model_version"].isin(selected_models)].copy()
+                        counts = chosen.groupby("model_version")["game_id"].nunique()
+                        st.caption("Available completed games by model: " + " · ".join(
+                            f"{name}: {int(counts[name])}" for name in selected_models
+                        ))
+                        game_sets = [set(chosen.loc[chosen["model_version"] == m, "game_id"])
+                                     for m in selected_models]
+                        shared_ids = set.intersection(*game_sets)
+                        paired_lab = chosen.loc[chosen["game_id"].isin(shared_ids)].copy()
+                        st.metric("Completed games shared by all selected models", f"{len(shared_ids):,}")
+                        if not shared_ids:
+                            st.info(
+                                "These models have no completed games in common at this stage yet. "
+                                "V3 collection has only just started; wait for future games to finish "
+                                "or select fewer models."
+                            )
+                        else:
+                            paired_lab["error"] = paired_lab["projected_total"] - paired_lab["actual_total"]
+                            paired_lab["absolute_error"] = paired_lab["error"].abs()
+                            paired_lab["squared_error"] = paired_lab["error"] ** 2
+                            paired_lab["winner_actual"] = np.where(
+                                paired_lab["home_goals"] > paired_lab["away_goals"],
+                                "home", "away"
+                            )
+                            paired_lab["winner_prediction"] = np.where(
+                                paired_lab["home_win_probability"] >= 0.5, "home", "away"
+                            )
+                            paired_lab["winner_correct"] = np.where(
+                                paired_lab[["home_win_probability", "away_win_probability"]].notna().all(axis=1),
+                                (paired_lab["winner_actual"] == paired_lab["winner_prediction"]).astype(float),
+                                np.nan,
+                            )
+                            paired_lab["winner_brier"] = (
+                                paired_lab["home_win_probability"] -
+                                (paired_lab["winner_actual"] == "home").astype(float)
+                            ) ** 2
+                            paired_lab.loc[paired_lab["home_win_probability"].isna(), "winner_brier"] = np.nan
+
+                            summaries = []
+                            for name, group in paired_lab.groupby("model_version"):
+                                row = {
+                                    "Model": name,
+                                    "Games": len(group),
+                                    "Total MAE": group["absolute_error"].mean(),
+                                    "Total RMSE": np.sqrt(group["squared_error"].mean()),
+                                    "Total bias": group["error"].mean(),
+                                    "Winner accuracy %": group["winner_correct"].mean() * 100,
+                                    "Winner Brier": group["winner_brier"].mean(),
+                                }
+                                for line, key in ((5.5, "5_5"), (6.0, "6_0"), (6.5, "6_5")):
+                                    prob_col = f"over_{key}_probability"
+                                    if prob_col in group.columns:
+                                        probs = pd.to_numeric(group[prob_col], errors="coerce")
+                                        actual = (group["actual_total"] > line).astype(float)
+                                        valid = probs.notna() & probs.between(0, 1)
+                                        # For whole-number 6.0, over is still a binary event
+                                        # (pushes are not over); display push-aware scoring separately.
+                                        row[f"Over {line} Brier"] = (
+                                            (probs[valid] - actual[valid]) ** 2
+                                        ).mean() if valid.any() else np.nan
+                                    else:
+                                        row[f"Over {line} Brier"] = np.nan
+                                summaries.append(row)
+                            summary_lab = pd.DataFrame(summaries).sort_values("Total MAE")
+                            st.markdown("#### Fair head-to-head scorecard")
+                            st.dataframe(
+                                summary_lab.style.format({
+                                    "Total MAE": "{:.3f}", "Total RMSE": "{:.3f}",
+                                    "Total bias": "{:+.3f}", "Winner accuracy %": "{:.1f}",
+                                    "Winner Brier": "{:.4f}", "Over 5.5 Brier": "{:.4f}",
+                                    "Over 6.0 Brier": "{:.4f}", "Over 6.5 Brier": "{:.4f}",
+                                }, na_rep="—"),
+                                use_container_width=True, hide_index=True,
+                            )
+                            st.caption(
+                                "Lower MAE, RMSE and Brier are better. Bias = projected minus actual goals. "
+                                "Winner accuracy and winner Brier require saved win probabilities. "
+                                "Over-line Brier scores the binary event of exceeding each fixed line; "
+                                "at 6.0 a push is treated as not-over, not as a losing wager. "
+                                "These are diagnostics, not measured betting ROI."
+                            )
+                            if len(shared_ids) < 30:
+                                st.warning(
+                                    "Fewer than 30 shared completed games. Treat rankings as highly preliminary."
+                                )
+                            elif len(shared_ids) < 100:
+                                st.info("Still below 100 shared completed games; rankings may change.")
+
+                            st.markdown("#### Total-goals error by model")
+                            st.bar_chart(summary_lab.set_index("Model")[["Total MAE"]])
+                            st.markdown("#### Game-by-game frozen predictions")
+                            display_lab = paired_lab[[
+                                "game_date", "away_team", "home_team", "model_version",
+                                "projected_total", "actual_total", "absolute_error"
+                            ]].sort_values(["game_date", "away_team", "model_version"], ascending=[False, True, True])
+                            st.dataframe(display_lab, use_container_width=True, hide_index=True)
+                            st.download_button(
+                                "⬇️ Export five-model matched-game results",
+                                display_lab.to_csv(index=False),
+                                file_name="frozen_forecast_five_model_comparison.csv",
+                                mime="text/csv", key="lab_export",
+                            )
+    except Exception as exc:
+        st.warning(f"Five-model performance lab could not load: {exc}")
+
+
+    # ============================================================
     # METHODOLOGY
     # ============================================================
 
