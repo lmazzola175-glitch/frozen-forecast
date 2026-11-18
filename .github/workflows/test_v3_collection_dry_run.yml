@@ -1,0 +1,27 @@
+name: Test Frozen Forecast V3 Collection Dry Run
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  v3-dry-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Compile V3 collector
+        run: python -m py_compile collect_v3_experiments.py
+      - name: Check EARLY V3 snapshots (read-only)
+        run: python collect_v3_experiments.py --mode early
+      - name: Check FINAL PREGAME V3 snapshots (read-only)
+        run: python collect_v3_experiments.py --mode final
