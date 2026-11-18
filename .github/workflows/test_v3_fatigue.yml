@@ -1,0 +1,49 @@
+name: Test Frozen Forecast V3 Fatigue Experiment
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-v3-fatigue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Compile experiment
+        run: python -m py_compile engine_v3_fatigue_experiment.py
+      - name: Compare live baseline and fatigue experiment (read-only)
+        run: |
+          python - <<'PY'
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          from engine_v3_fatigue_experiment import build_projections
+          day = datetime.now(ZoneInfo('America/New_York')).date().isoformat()
+          df, meta = build_projections(day)
+          print('Date:', day)
+          print('Model:', meta['model_version'])
+          print('Projected games:', len(df))
+          print('Fatigue-adjusted games:', meta.get('fatigue_adjusted_games', 0))
+          print('Unknown prior-game teams:', meta.get('unknown_prior_game_teams'))
+          if df.empty:
+              print('No pregame projections available; live integration not verified')
+          else:
+              for _, r in df.iterrows():
+                  a, h = float(r['Away Win Probability']), float(r['Home Win Probability'])
+                  assert abs(a+h-1) < 0.00001
+                  for line in (5.5, 6.0, 6.5):
+                      total = sum(float(r[f'{side} {line} Probability']) for side in ('Over','Under','Push'))
+                      assert abs(total-1) < 0.00001
+                  print(f"{r['Away Code']} @ {r['Home Code']} | B2B away={r['Away Back-to-Back']} home={r['Home Back-to-Back']} | baseline xG {r['Baseline Away xG']:.2f}-{r['Baseline Home xG']:.2f} | adjusted xG {r['Away xG']:.2f}-{r['Home xG']:.2f} | home win {h:.1%}")
+              print('V3 FATIGUE LIVE TEST PASSED')
+          print('NO DATABASE WRITES')
+          PY
