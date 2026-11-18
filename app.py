@@ -929,6 +929,170 @@ def render_live_dashboard():
     )
 
     # ============================================================
+    # OVER / UNDER ANALYZER — MANUAL MARKET PRICES, READ-ONLY
+    # ============================================================
+
+    st.divider()
+    st.html('<div class="ff-section-title">📈 OVER / UNDER ANALYZER</div>')
+    st.caption(
+        "Enter the sportsbook total and both prices yourself. No paid odds feed "
+        "and no database writes. Probabilities are experimental, uncalibrated "
+        "regulation-goals proxies, not verified full-game betting probabilities."
+    )
+
+    upcoming = df.loc[df["Game Status"].eq("UPCOMING")].copy()
+    if upcoming.empty:
+        st.info("No upcoming games are available for a pregame market comparison on this date.")
+    else:
+        matchup_ids = upcoming["Game ID"].astype(str).tolist()
+        labels = {
+            str(r["Game ID"]): f'{r["Away Code"]} @ {r["Home Code"]} · {r["Start ET"]}'
+            for _, r in upcoming.iterrows()
+        }
+        chosen_id = st.selectbox(
+            "Choose an upcoming matchup", matchup_ids,
+            format_func=lambda gid: labels.get(gid, gid),
+            key="ou_analyzer_matchup",
+        )
+        chosen = upcoming.loc[upcoming["Game ID"].astype(str).eq(chosen_id)].iloc[0]
+
+        input_a, input_b, input_c = st.columns(3)
+        with input_a:
+            market_line = st.selectbox(
+                "Sportsbook total", [5.5, 6.0, 6.5], index=1,
+                key=f"ou_market_line_{chosen_id}",
+            )
+        with input_b:
+            over_odds = st.number_input(
+                "Over American odds", min_value=-10000, max_value=10000,
+                value=-110, step=5, key=f"ou_over_odds_{chosen_id}",
+            )
+        with input_c:
+            under_odds = st.number_input(
+                "Under American odds", min_value=-10000, max_value=10000,
+                value=-110, step=5, key=f"ou_under_odds_{chosen_id}",
+            )
+
+        def profit_per_dollar(american):
+            if american >= 100:
+                return american / 100.0
+            if american <= -100:
+                return 100.0 / abs(american)
+            return None
+
+        over_profit = profit_per_dollar(over_odds)
+        under_profit = profit_per_dollar(under_odds)
+        if over_profit is None or under_profit is None:
+            st.error("American odds must be at least +100 or at most -100 (for example, -110 or +120).")
+        else:
+            # Use only actual stored V3 probabilities. Never reconstruct old
+            # challenger probabilities from the current engine or projected total.
+            model_versions = (
+                "v3_dual_market_baseline",
+                "v3_fatigue_experiment",
+                "v3_totals_scaled105_experiment",
+            )
+            model_labels = {
+                "v3_dual_market_baseline": "V3 baseline",
+                "v3_fatigue_experiment": "V3 fatigue",
+                "v3_totals_scaled105_experiment": "V3 scaled totals (+5%)",
+            }
+            probability_fields = {
+                5.5: ("over_5_5_probability", "under_5_5_probability", None),
+                6.0: ("over_6_0_probability", "under_6_0_probability", "push_6_0_probability"),
+                6.5: ("over_6_5_probability", "under_6_5_probability", None),
+            }
+            over_field, under_field, push_field = probability_fields[market_line]
+            comparisons = []
+            unavailable_models = []
+            for version in model_versions:
+                record = None
+                source_label = ""
+                # For baseline, the dashboard's displayed live projection is
+                # preferable to a potentially older EARLY snapshot.
+                if version == "v3_dual_market_baseline":
+                    current_probs = chosen.get("Total Probabilities")
+                    if (selected_model == version
+                            and chosen["Projection Source"].startswith("LIVE")
+                            and isinstance(current_probs, dict)):
+                        current = current_probs.get(market_line, {})
+                        record = {
+                            over_field: current.get("Over"),
+                            under_field: current.get("Under"),
+                            **({push_field: current.get("Push")} if push_field else {}),
+                        }
+                        source_label = "LIVE (refreshes while app is open)"
+                if record is None:
+                    try:
+                        stored = load_saved_predictions(date_string, version)
+                        if not stored.empty:
+                            matching = stored.loc[stored["game_id"].astype(str).eq(chosen_id)]
+                            if not matching.empty:
+                                record = matching.iloc[0].to_dict()
+                                source_label = str(record.get("snapshot_type", "SAVED"))
+                    except Exception as exc:
+                        unavailable_models.append(f"{model_labels[version]}: database unavailable ({exc})")
+                        continue
+                if record is None:
+                    unavailable_models.append(f"{model_labels[version]}: no saved pregame probabilities")
+                    continue
+                p_over = safe_float(record.get(over_field))
+                p_under = safe_float(record.get(under_field))
+                p_push = safe_float(record.get(push_field)) if push_field else 0.0
+                if (not all(math.isfinite(p) and 0 <= p <= 1 for p in (p_over, p_under, p_push))
+                        or abs(p_over + p_under + p_push - 1) > 0.001):
+                    unavailable_models.append(f"{model_labels[version]}: invalid or missing probabilities")
+                    continue
+                # $1 stake: a win earns decimal profit; a loss loses $1;
+                # a push returns the stake (net profit zero).
+                over_ev = p_over * over_profit - p_under
+                under_ev = p_under * under_profit - p_over
+                comparisons.append({
+                    "Model": model_labels[version],
+                    "Snapshot": source_label,
+                    "Over %": round(p_over * 100, 2),
+                    "Under %": round(p_under * 100, 2),
+                    "Push %": round(p_push * 100, 2),
+                    "Over EV %": round(over_ev * 100, 2),
+                    "Under EV %": round(under_ev * 100, 2),
+                })
+
+            if comparisons:
+                comparison_df = pd.DataFrame(comparisons)
+                st.dataframe(
+                    comparison_df, hide_index=True, use_container_width=True,
+                    column_config={
+                        col: st.column_config.NumberColumn(col, format="%.2f")
+                        for col in ("Over %", "Under %", "Push %", "Over EV %", "Under EV %")
+                    },
+                )
+                st.caption(
+                    "EV % is estimated net profit per $1 staked, expressed as a percentage. "
+                    "For a whole-number line, a push earns $0 and is included correctly. "
+                    "Positive modeled EV does not establish a real betting advantage."
+                )
+                if len(comparisons) > 1:
+                    st.caption(
+                        "Models may use different snapshot times (LIVE, EARLY, FINAL PREGAME). "
+                        "Compare their timestamps before interpreting differences."
+                    )
+            else:
+                st.info(
+                    "No valid V3 probabilities for this matchup yet. "
+                    "Select the V3 baseline model for a live estimate, or wait for saved challenger snapshots."
+                )
+            if unavailable_models:
+                with st.expander("Unavailable model comparisons"):
+                    for reason in unavailable_models:
+                        st.write(reason)
+
+    st.caption(
+        "Research only. The underlying Poisson-style estimates may omit overtime effects "
+        "and have not been calibrated to sportsbook totals. Market inputs are temporary "
+        "and are not saved as historical betting records."
+    )
+
+    # ============================================================
     # HISTORICAL DATABASE
     # ============================================================
 
