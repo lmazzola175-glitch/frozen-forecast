@@ -1,0 +1,122 @@
+
+name: Test Frozen Forecast V3
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-v3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check V3 Python files
+        run: |
+          python -m py_compile engine_v3.py
+          python -m py_compile over_under_probability.py
+
+      - name: Test over-under probabilities
+        run: |
+          python - <<'PY'
+          from over_under_probability import calculate_total_probabilities
+
+          results = calculate_total_probabilities(3.4, 2.8)
+
+          for line in (5.5, 6.0, 6.5):
+              p = results[line]
+
+              over = p["over_probability"]
+              under = p["under_probability"]
+              push = p["push_probability"]
+
+              assert abs(over + under + push - 1) < 1e-9
+              assert all(0 <= x <= 1 for x in (over, under, push))
+
+              if line != 6.0:
+                  assert push == 0
+
+              print(
+                  f"Line {line}: "
+                  f"Over {over:.1%} | "
+                  f"Under {under:.1%} | "
+                  f"Push {push:.1%}"
+              )
+
+          assert abs(
+              results[6.0]["over_probability"]
+              - results[6.5]["over_probability"]
+          ) < 1e-9
+
+          print("OVER/UNDER TESTS PASSED")
+          PY
+
+      - name: Test V3 projections
+        run: |
+          python - <<'PY'
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          from engine_v3 import build_projections, MODEL_VERSION
+
+          date = datetime.now(
+              ZoneInfo("America/New_York")
+          ).strftime("%Y-%m-%d")
+
+          print("Testing date:", date)
+          print("Model:", MODEL_VERSION)
+
+          df, metadata = build_projections(date)
+
+          print("Metadata:", metadata)
+          print("Games projected:", len(df))
+
+          if df.empty:
+              print("No eligible pregame projections.")
+              print("Live integration not verified.")
+          else:
+              required = [
+                  "Away Win Probability",
+                  "Home Win Probability",
+                  "Over 5.5 Probability",
+                  "Under 5.5 Probability",
+                  "Over 6.0 Probability",
+                  "Under 6.0 Probability",
+                  "Push 6.0 Probability",
+                  "Over 6.5 Probability",
+                  "Under 6.5 Probability",
+              ]
+
+              for column in required:
+                  assert column in df.columns, column
+                  assert df[column].between(0, 1).all()
+
+              for line in (5.5, 6.0, 6.5):
+                  total = (
+                      df[f"Over {line} Probability"]
+                      + df[f"Under {line} Probability"]
+                      + df[f"Push {line} Probability"]
+                  )
+                  assert ((total - 1).abs() < 0.00001).all()
+
+              print(df[
+                  ["Away Code", "Home Code",
+                   "Projected Total",
+                   "Away Win Probability",
+                   "Home Win Probability"]
+              ].to_string(index=False))
+
+              print("V3 LIVE PROJECTION TEST PASSED")
+          PY
