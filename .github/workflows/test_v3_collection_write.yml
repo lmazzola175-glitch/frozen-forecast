@@ -1,0 +1,49 @@
+name: Test Frozen Forecast V3 Controlled Write
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Collection window'
+        required: true
+        type: choice
+        options:
+          - early
+          - final
+      write_enabled:
+        description: 'Allow at most ONE new V3 snapshot insert?'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  v3-controlled-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Check Python syntax
+        run: python -m py_compile collect_v3_experiments_write.py
+      - name: Test V3 snapshot collector
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          COLLECTION_MODE: ${{ inputs.mode }}
+          WRITE_ENABLED: ${{ inputs.write_enabled }}
+        shell: bash
+        run: |
+          ARGS=(--mode "$COLLECTION_MODE" --max-inserts 1)
+          if [[ "$WRITE_ENABLED" == "true" ]]; then
+            ARGS+=(--write)
+          fi
+          python collect_v3_experiments_write.py "${ARGS[@]}"
