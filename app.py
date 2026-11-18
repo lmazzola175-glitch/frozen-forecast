@@ -456,6 +456,9 @@ def cached_projections(date, verify_rosters, model_version):
         # Keep V2's original recent-form formula; never silently use V1.
         challenger = importlib.import_module("engine_v2")
         return challenger.build_projections(date, verify_rosters)
+    if model_version == "v3_dual_market_baseline":
+        challenger = importlib.import_module("engine_v3")
+        return challenger.build_projections(date, verify_rosters)
     raise ValueError(f"Unsupported model version: {model_version}")
 
 
@@ -553,6 +556,7 @@ with st.sidebar:
 MODEL_OPTIONS = {
     "v1_goalie_adjusted": "V1 · Goalie adjusted",
     "v2_recent5_w20": "V2 · Recent five games (20%)",
+    "v3_dual_market_baseline": "V3 · Moneyline + Over/Under (baseline)",
 }
 model_left, model_right = st.columns([2, 3], vertical_alignment="bottom")
 with model_left:
@@ -562,7 +566,7 @@ with model_left:
         key="projection_model_selector",
     )
 with model_right:
-    st.caption("Upcoming games show the latest available live projection for the selected model. Frozen snapshots remain unchanged.")
+    st.caption("Upcoming games show live projections. V3 is currently live-only; V1/V2 frozen snapshots remain unchanged.")
 
 # Streamlit's native timed fragments rerun this section while the app is open.
 # The rest of the page and GitHub's scheduled collector remain independent.
@@ -690,7 +694,7 @@ def render_live_dashboard():
         # Keep final and started games on their original saved pregame forecast.
         # For upcoming games, show current live projections for the selected model.
         if status == "UPCOMING" and live is not None:
-            source = "LIVE · " + ("V1" if selected_model == "v1_goalie_adjusted" else "V2")
+            source = "LIVE · " + {"v1_goalie_adjusted": "V1", "v2_recent5_w20": "V2", "v3_dual_market_baseline": "V3"}[selected_model]
             away_xg = safe_float(live.get("Away xG"))
             home_xg = safe_float(live.get("Home xG"))
             total = safe_float(live.get("Projected Total"))
@@ -702,6 +706,7 @@ def render_live_dashboard():
             away_p = safe_float(live.get("Away Win Probability"))
             home_p = safe_float(live.get("Home Win Probability"))
             projected_winner = live.get("Projected Winner")
+            total_probs = {line: {side: safe_float(live.get(f"{side} {line} Probability")) for side in ("Over", "Under", "Push")} for line in (5.5, 6.0, 6.5)} if selected_model == "v3_dual_market_baseline" else None
         elif saved is not None:
             source = display_text(saved.get("snapshot_type"), "SAVED")
             away_xg = safe_float(saved.get("away_projected_goals"))
@@ -724,6 +729,7 @@ def render_live_dashboard():
             away_p = safe_float(saved.get("away_win_probability"))
             home_p = safe_float(saved.get("home_win_probability"))
             projected_winner = saved.get("projected_winner")
+            total_probs = None  # Never fabricate historical V3 totals probabilities.
         else:
             unavailable.append(f"{away} @ {home}: no {selected_model} projection available")
             continue
@@ -749,7 +755,7 @@ def render_live_dashboard():
             "Projection Source": source, "Start ET": format_start(game.get("startTimeUTC")),
             "Start UTC": game.get("startTimeUTC"),
             "Away Win Probability": away_p, "Home Win Probability": home_p,
-            "Projected Winner": projected_winner,
+            "Projected Winner": projected_winner, "Total Probabilities": total_probs,
             "Checked At UTC": live.get("Calculated At UTC") if status == "UPCOMING" and live is not None else None,
         })
 
@@ -783,8 +789,8 @@ def render_live_dashboard():
     .ff-kpi-label {font-size:10px;color:#9fbdd1;letter-spacing:.7px;text-transform:uppercase}
     .ff-kpi-value {font-size:26px;font-weight:900;color:#f4fbff;margin:2px 0}
     .ff-kpi-sub {font-size:11px;color:#91b5cf}
-    .ff-scoreboard {display:flex;flex-direction:column;gap:7px;width:100%;max-width:1190px;margin:0 auto}
-    .ff-score-row {display:grid;grid-template-columns:100px minmax(340px,1.3fr) 110px minmax(210px,1fr);gap:16px;align-items:center;padding:11px 16px;background:#0a2033;border:1px solid #24455e;border-radius:12px;min-height:112px}
+    .ff-scoreboard {display:flex;flex-direction:column;gap:7px;width:100%;max-width:1510px;margin:0 auto}
+    .ff-score-row {display:grid;grid-template-columns:100px minmax(280px,1.3fr) 100px minmax(185px,1fr) minmax(260px,1.2fr);gap:16px;align-items:center;padding:11px 16px;background:#0a2033;border:1px solid #24455e;border-radius:12px;min-height:112px}
     .ff-score-row > div {min-width:0}
     .ff-score-row:hover {background:#102b43;border-color:#3b789e}
     .ff-small {font-size:10px;color:#9fbad0}
@@ -803,13 +809,14 @@ def render_live_dashboard():
     .ff-status {font-size:10px;color:#9fc1d8}
     .ff-risk {font-weight:850;font-size:11px}
     .ff-risk-high {color:#61e6a5}.ff-risk-medium {color:#ffdd74}.ff-risk-low,.ff-risk-blocked {color:#ff899c}.ff-risk-unknown {color:#9fbad0}
-    .ff-score-header {display:grid;grid-template-columns:100px minmax(340px,1.3fr) 110px minmax(210px,1fr);gap:16px;max-width:1190px;margin:0 auto;padding:0 16px 6px;color:#86a9c2;font-size:10px;text-transform:uppercase;letter-spacing:.6px}
+    .ff-score-header {display:grid;grid-template-columns:100px minmax(280px,1.3fr) 100px minmax(185px,1fr) minmax(260px,1.2fr);gap:16px;max-width:1510px;margin:0 auto;padding:0 16px 6px;color:#86a9c2;font-size:10px;text-transform:uppercase;letter-spacing:.6px}
+    .ff-ou-cell{display:flex;flex-direction:column;gap:5px}.ff-ou-row{display:grid;grid-template-columns:40px 1fr 1fr 1fr;gap:4px;align-items:center;font-size:11px;color:#dceefa}.ff-ou-head{color:#8fb5cf;font-size:10px}.ff-ou-line{font-weight:850;color:#80d6ff}.ff-ou-best{color:#79e7bc;font-weight:800}.ff-ou-note{font-size:10px;color:#93b3cb}
     .ff-game-detail {grid-column:1/-1;border-top:1px solid #24455e;padding-top:5px;color:#9fc1d8;font-size:11px}
     .ff-game-detail summary {cursor:pointer;list-style:revert;color:#8ac5e9;font-weight:650;width:max-content;max-width:100%}
     .ff-game-detail[open] summary {margin-bottom:6px}
     .ff-detail-body {display:flex;flex-wrap:wrap;gap:10px 24px;line-height:1.5}
-    @media(max-width:900px){.ff-score-header{display:none}.ff-score-row{grid-template-columns:82px minmax(210px,1fr) 85px;gap:10px}.ff-win-cell{grid-column:2 / 4}.ff-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.ff-team-line{grid-template-columns:38px minmax(0,1fr) 42px}.ff-team-line img{width:38px;height:36px}}
-    @media(max-width:600px){.ff-score-row{grid-template-columns:1fr 78px;gap:9px;padding:12px}.ff-time-cell{grid-column:1/-1;display:flex;gap:9px;align-items:center}.ff-teams{grid-column:1}.ff-total-cell{grid-column:2}.ff-win-cell{grid-column:1/-1}.ff-team-line{font-size:12px;grid-template-columns:34px minmax(0,1fr) 38px;gap:6px}.ff-team-line img{width:34px;height:34px}.ff-goals{font-size:13px}.ff-total-cell .ff-total{font-size:25px}.ff-kpi{padding:10px}.ff-kpi-value{font-size:23px}}
+    @media(max-width:900px){.ff-score-header{display:none}.ff-score-row{grid-template-columns:82px minmax(210px,1fr) 85px;gap:10px}.ff-win-cell{grid-column:2 / 4}.ff-ou-cell{grid-column:1 / -1}.ff-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.ff-team-line{grid-template-columns:38px minmax(0,1fr) 42px}.ff-team-line img{width:38px;height:36px}}
+    @media(max-width:600px){.ff-score-row{grid-template-columns:1fr 78px;gap:9px;padding:12px}.ff-time-cell{grid-column:1/-1;display:flex;gap:9px;align-items:center}.ff-teams{grid-column:1}.ff-total-cell{grid-column:2}.ff-win-cell{grid-column:1/-1}.ff-ou-cell{grid-column:1/-1}.ff-team-line{font-size:12px;grid-template-columns:34px minmax(0,1fr) 38px;gap:6px}.ff-team-line img{width:34px;height:34px}.ff-goals{font-size:13px}.ff-total-cell .ff-total{font-size:25px}.ff-kpi{padding:10px}.ff-kpi-value{font-size:23px}}
     </style>
     ''')
 
@@ -873,6 +880,25 @@ def render_live_dashboard():
         checked_label = checked.tz_convert(ET).strftime("%I:%M %p ET") if pd.notna(checked) else "Saved snapshot"
         away_confirmation = escape(game["Away Status"])
         home_confirmation = escape(game["Home Status"])
+        total_probs = game.get("Total Probabilities")
+        if selected_model == "v3_dual_market_baseline" and isinstance(total_probs, dict):
+            ou_parts = ['<div class="ff-ou-row ff-ou-head"><span>Line</span><span>Over</span><span>Under</span><span>Push</span></div>']
+            for line in (5.5, 6.0, 6.5):
+                p = total_probs.get(line, {})
+                over = safe_float(p.get("Over"))
+                under = safe_float(p.get("Under"))
+                push = safe_float(p.get("Push"))
+                if all(math.isfinite(v) and 0 <= v <= 1 for v in (over, under, push)) and abs(over + under + push - 1) < 0.001:
+                    o_class = ' class="ff-ou-best"' if over > under else ''
+                    u_class = ' class="ff-ou-best"' if under > over else ''
+                    ou_parts.append(f'<div class="ff-ou-row"><span class="ff-ou-line">{line:.1f}</span><span{o_class}>{over:.1%}</span><span{u_class}>{under:.1%}</span><span>{push:.1%}</span></div>')
+                else:
+                    ou_parts.append(f'<div class="ff-ou-row"><span class="ff-ou-line">{line:.1f}</span><span>—</span><span>—</span><span>—</span></div>')
+            ou_content = ''.join(ou_parts) + '<div class="ff-ou-note">Uncalibrated regulation-goals proxy</div>'
+        elif selected_model == "v3_dual_market_baseline":
+            ou_content = '<div class="ff-ou-note">No frozen V3 totals probabilities available for this game</div>'
+        else:
+            ou_content = '<div class="ff-ou-note">Select V3 to view over/under probabilities</div>'
         score_rows.append(f'''
         <div class="ff-score-row">
           <div class="ff-time-cell"><div class="ff-time">{escape(game["Start ET"])}</div><div class="ff-small">{escape(game["Game Status"])}</div><div class="ff-status">{source}</div></div>
@@ -885,15 +911,16 @@ def render_live_dashboard():
             <div class="ff-prob"><div class="ff-away-bar" style="width:{away_pct:.2f}%"></div><div class="ff-home-bar" style="width:{home_pct:.2f}%"></div></div>
             <div class="ff-prob-legend"><span>{away} {f"{away_pct:.1f}%" if valid_probs else "—"}</span><span>{home} {f"{home_pct:.1f}%" if valid_probs else "—"}</span></div>
           </div>
+          <div class="ff-ou-cell">{ou_content}</div>
           <details class="ff-game-detail"><summary>Goalies &amp; reliability · <span class="ff-risk ff-risk-{reliability.lower()}">{reliability}</span></summary>
             <div class="ff-detail-body"><span><strong>Starting goalies:</strong> {goalie_names}</span><span><strong>Statuses:</strong> {away_confirmation} / {home_confirmation}</span><span><strong>Checked:</strong> {escape(checked_label)}</span><span><strong>Source:</strong> {source}</span></div>
           </details>
         </div>''')
 
-    st.html('''<div class="ff-score-header"><span>Start / source</span><span>Teams / projected goals</span><span>Projected total</span><span>Winner probability</span></div>''' + '<div class="ff-scoreboard">' + ''.join(score_rows) + '</div>')
+    st.html('''<div class="ff-score-header"><span>Start / source</span><span>Teams / projected goals</span><span>Projected total</span><span>Winner probability</span><span>Over / Under · 5.5 / 6 / 6.5</span></div>''' + '<div class="ff-scoreboard">' + ''.join(score_rows) + '</div>')
 
     st.caption("UNKNOWN goalie reliability means the saved snapshot lacks verifiable starter-confirmation statuses; it does not imply an unconfirmed goalie.")
-    st.caption("Win probabilities use independent Poisson goal distributions and a 50/50 split of regulation ties. They have not been historically calibrated. Goal projections are estimates, not betting recommendations.")
+    st.caption("Win probabilities use independent Poisson goal distributions and a 50/50 split of regulation ties. V3 over/under estimates are uncalibrated regulation-goals proxies; overtime can change full-game totals. No betting edge or profitability has been established.")
 
     st.download_button(
         "⬇️ Export game projections CSV", df.to_csv(index=False),
