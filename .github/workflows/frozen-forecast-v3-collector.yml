@@ -1,0 +1,88 @@
+name: Frozen Forecast V3 Experimental Collector
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Collection window"
+        required: true
+        default: early
+        type: choice
+        options:
+          - early
+          - final
+      operation:
+        description: "Dry run or save ALL eligible snapshots"
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - write
+  schedule:
+    # Both UTC hours needed for 9 AM New York across DST.
+    - cron: "0 13 * * *"
+    - cron: "0 14 * * *"
+    # Check FINAL PREGAME every 15 minutes; the Python collector
+    # enforces the actual pregame window for each game.
+    - cron: "*/15 17-23 * * *"
+    - cron: "*/15 0-6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frozen-forecast-v3-experimental-collector
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Determine collection settings
+        id: settings
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_OPERATION: ${{ inputs.operation }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "mode=$INPUT_MODE" >> "$GITHUB_OUTPUT"
+            echo "operation=$INPUT_OPERATION" >> "$GITHUB_OUTPUT"
+          elif [ "$SCHEDULE" = "0 13 * * *" ] || [ "$SCHEDULE" = "0 14 * * *" ]; then
+            if [ "$(TZ=America/New_York date +%H)" = "09" ]; then
+              echo "mode=early" >> "$GITHUB_OUTPUT"
+              echo "operation=write" >> "$GITHUB_OUTPUT"
+            else
+              echo "mode=skip" >> "$GITHUB_OUTPUT"
+              echo "operation=dry-run" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "mode=final" >> "$GITHUB_OUTPUT"
+            echo "operation=write" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Run V3 experimental collector
+        if: steps.settings.outputs.mode != 'skip'
+        shell: bash
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          COLLECTION_MODE: ${{ steps.settings.outputs.mode }}
+          COLLECTION_OPERATION: ${{ steps.settings.outputs.operation }}
+        run: |
+          ARGS=(--mode "$COLLECTION_MODE")
+          if [ "$COLLECTION_OPERATION" = "write" ]; then
+            ARGS+=(--write --all-eligible)
+          fi
+          python collect_v3_experiments_scheduled.py "${ARGS[@]}"
