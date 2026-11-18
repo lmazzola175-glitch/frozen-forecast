@@ -13,14 +13,22 @@ on:
           - early
           - final
 
-      write_enabled:
-        description: 'Allow at most ONE new V3 snapshot insert?'
+      operation:
+        description: 'Choose how predictions are collected'
         required: true
-        type: boolean
-        default: false
+        type: choice
+        default: dry-run
+        options:
+          - dry-run
+          - one-write
+          - full-batch
 
 permissions:
   contents: read
+
+concurrency:
+  group: frozen-forecast-v3-collector
+  cancel-in-progress: false
 
 jobs:
   v3-controlled-test:
@@ -40,21 +48,53 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Check Python syntax
-        run: python -m py_compile collect_v3_experiments_scheduled.py
+        run: |
+          python -m py_compile collect_v3_experiments_scheduled.py
+          python -m py_compile engine_v3.py
+          python -m py_compile engine_v3_fatigue_experiment.py
+          python -m py_compile engine_v3_totals_experiment.py
+
+      - name: Show collection settings
+        env:
+          COLLECTION_MODE: ${{ inputs.mode }}
+          COLLECTION_OPERATION: ${{ inputs.operation }}
+        run: |
+          echo "Collection window: $COLLECTION_MODE"
+          echo "Operation: $COLLECTION_OPERATION"
 
       - name: Test V3 snapshot collector
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           COLLECTION_MODE: ${{ inputs.mode }}
-          WRITE_ENABLED: ${{ inputs.write_enabled }}
+          COLLECTION_OPERATION: ${{ inputs.operation }}
         shell: bash
         run: |
-          ARGS=(--mode "$COLLECTION_MODE" --max-inserts 1)
+          ARGS=(--mode "$COLLECTION_MODE")
 
-          if [[ "$WRITE_ENABLED" == "true" ]]; then
-            ARGS+=(--write)
-          fi
+          case "$COLLECTION_OPERATION" in
+            dry-run)
+              ARGS+=(--max-inserts 1)
+              ;;
+
+            one-write)
+              ARGS+=(--write --max-inserts 1)
+              ;;
+
+            full-batch)
+              ARGS+=(--write --all-eligible)
+              ;;
+
+            *)
+              echo "Invalid collection operation"
+              exit 1
+              ;;
+          esac
 
           python collect_v3_experiments_scheduled.py "${ARGS[@]}"
+
+      - name: Collection complete
+        if: success()
+        run: echo "V3 controlled collection test completed successfully."
+
 
