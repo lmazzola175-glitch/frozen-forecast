@@ -1183,1201 +1183,1204 @@ def render_live_dashboard():
             )
 
 
-    # ============================================================
-    # HISTORICAL MODEL PERFORMANCE
-    # ============================================================
+    # Older dashboards are retained for reference but hidden by default.
+    with st.expander("📁 Previous reports · V1/V2 historical dashboards", expanded=False):
+        st.caption("Legacy accuracy, winner and game-by-game reports. The new Performance Lab below is the primary comparison view.")
+        # ============================================================
+        # HISTORICAL MODEL PERFORMANCE
+        # ============================================================
 
-    st.divider()
+        st.divider()
 
-    st.html("""
-    <div class="ff-section-title">
-        📊 HISTORICAL MODEL PERFORMANCE
-    </div>
-    """)
+        st.html("""
+        <div class="ff-section-title">
+            📊 HISTORICAL MODEL PERFORMANCE
+        </div>
+        """)
 
-    st.caption(
-        "Frozen Forecast evaluates frozen pregame "
-        "goal projections against official NHL final scores."
-    )
+        st.caption(
+            "Frozen Forecast evaluates frozen pregame "
+            "goal projections against official NHL final scores."
+        )
 
-    try:
-        performance_df = load_model_performance()
+        try:
+            performance_df = load_model_performance()
 
-        if performance_df.empty:
-            st.info(
-                "Waiting for completed games with matching "
-                "pregame predictions. Accuracy metrics and "
-                "charts will populate after final scores "
-                "are collected."
-            )
-
-        else:
-            performance_df = (
-                performance_df.copy()
-            )
-
-            numeric_cols = [
-                "games_evaluated",
-                "mae",
-                "rmse",
-                "bias",
-                "average_projected_total",
-                "average_actual_total",
-            ]
-
-            for col in numeric_cols:
-                if col in performance_df.columns:
-                    performance_df[col] = pd.to_numeric(
-                        performance_df[col],
-                        errors="coerce"
-                    )
-
-            valid = performance_df.dropna(
-                subset=[
-                    "mae",
-                    "rmse",
-                    "games_evaluated"
-                ]
-            ).copy()
-
-            if valid.empty:
+            if performance_df.empty:
                 st.info(
-                    "Performance records are present, "
-                    "but valid metrics are not available yet."
+                    "Waiting for completed games with matching "
+                    "pregame predictions. Accuracy metrics and "
+                    "charts will populate after final scores "
+                    "are collected."
                 )
 
             else:
-                best = (
-                    valid.sort_values(
-                        [
-                            "mae",
-                            "games_evaluated"
-                        ],
-                        ascending=[
-                            True,
-                            False
-                        ]
-                    )
-                    .iloc[0]
+                performance_df = (
+                    performance_df.copy()
                 )
 
-                st.caption(
-                    "Summary cards show the lowest observed "
-                    "MAE among available model/snapshot groups. "
-                    "Small samples may be misleading."
-                )
+                numeric_cols = [
+                    "games_evaluated",
+                    "mae",
+                    "rmse",
+                    "bias",
+                    "average_projected_total",
+                    "average_actual_total",
+                ]
 
-                c1, c2, c3, c4 = st.columns(4)
+                for col in numeric_cols:
+                    if col in performance_df.columns:
+                        performance_df[col] = pd.to_numeric(
+                            performance_df[col],
+                            errors="coerce"
+                        )
 
-                c1.metric(
-                    "Games Evaluated",
-                    f'{int(best["games_evaluated"]):,}'
-                )
+                valid = performance_df.dropna(
+                    subset=[
+                        "mae",
+                        "rmse",
+                        "games_evaluated"
+                    ]
+                ).copy()
 
-                c2.metric(
-                    "Mean Absolute Error",
-                    f'{best["mae"]:.2f} goals'
-                )
-
-                c3.metric(
-                    "Root Mean Squared Error",
-                    f'{best["rmse"]:.2f} goals'
-                )
-
-                c4.metric(
-                    "Prediction Bias",
-                    (
-                        f'{best["bias"]:+.2f} goals'
-                        if pd.notna(best.get("bias"))
-                        else "—"
-                    )
-                )
-
-                st.caption(
-                    f'Model: '
-                    f'{best.get("model_version", "Unknown")}'
-                    f' | Snapshot: '
-                    f'{best.get("snapshot_type", "Unknown")}'
-                )
-
-                st.markdown(
-                    "#### EARLY vs. FINAL PREGAME"
-                )
-
-                comparison = valid[
-                    valid["snapshot_type"].isin(
-                        [
-                            "EARLY",
-                            "FINAL PREGAME"
-                        ]
-                    )
-                ].copy()
-
-                if comparison.empty:
+                if valid.empty:
                     st.info(
-                        "No snapshot performance "
-                        "comparisons are available."
+                        "Performance records are present, "
+                        "but valid metrics are not available yet."
                     )
 
                 else:
-                    display_columns = [
-                        "model_version",
-                        "snapshot_type",
-                        "games_evaluated",
-                        "mae",
-                        "rmse",
-                        "bias",
-                        "average_projected_total",
-                        "average_actual_total",
+                    best = (
+                        valid.sort_values(
+                            [
+                                "mae",
+                                "games_evaluated"
+                            ],
+                            ascending=[
+                                True,
+                                False
+                            ]
+                        )
+                        .iloc[0]
+                    )
+
+                    st.caption(
+                        "Summary cards show the lowest observed "
+                        "MAE among available model/snapshot groups. "
+                        "Small samples may be misleading."
+                    )
+
+                    c1, c2, c3, c4 = st.columns(4)
+
+                    c1.metric(
+                        "Games Evaluated",
+                        f'{int(best["games_evaluated"]):,}'
+                    )
+
+                    c2.metric(
+                        "Mean Absolute Error",
+                        f'{best["mae"]:.2f} goals'
+                    )
+
+                    c3.metric(
+                        "Root Mean Squared Error",
+                        f'{best["rmse"]:.2f} goals'
+                    )
+
+                    c4.metric(
+                        "Prediction Bias",
+                        (
+                            f'{best["bias"]:+.2f} goals'
+                            if pd.notna(best.get("bias"))
+                            else "—"
+                        )
+                    )
+
+                    st.caption(
+                        f'Model: '
+                        f'{best.get("model_version", "Unknown")}'
+                        f' | Snapshot: '
+                        f'{best.get("snapshot_type", "Unknown")}'
+                    )
+
+                    st.markdown(
+                        "#### EARLY vs. FINAL PREGAME"
+                    )
+
+                    comparison = valid[
+                        valid["snapshot_type"].isin(
+                            [
+                                "EARLY",
+                                "FINAL PREGAME"
+                            ]
+                        )
+                    ].copy()
+
+                    if comparison.empty:
+                        st.info(
+                            "No snapshot performance "
+                            "comparisons are available."
+                        )
+
+                    else:
+                        display_columns = [
+                            "model_version",
+                            "snapshot_type",
+                            "games_evaluated",
+                            "mae",
+                            "rmse",
+                            "bias",
+                            "average_projected_total",
+                            "average_actual_total",
+                        ]
+
+                        display_columns = [
+                            col for col in display_columns
+                            if col in comparison.columns
+                        ]
+
+                        st.dataframe(
+                            comparison[display_columns],
+                            use_container_width=True,
+                            hide_index=True
+                        )
+
+                        chart_data = comparison[
+                            [
+                                "model_version",
+                                "snapshot_type",
+                                "mae"
+                            ]
+                        ].copy()
+
+                        chart_data["Group"] = (
+                            chart_data["snapshot_type"].astype(str)
+                            + " | "
+                            + chart_data["model_version"].astype(str)
+                        )
+
+                        st.markdown(
+                            "#### Mean Absolute Error by Snapshot"
+                        )
+
+                        st.bar_chart(
+                            chart_data.set_index("Group")[["mae"]],
+                            y_label="Mean absolute error (goals)"
+                        )
+
+                    st.markdown(
+                        "#### How to Read These Metrics"
+                    )
+
+                    st.caption(
+                        "MAE is the average absolute difference "
+                        "between projected and actual total goals. "
+                        "RMSE penalizes larger errors more heavily. "
+                        "Positive bias means the model tends to "
+                        "project too many goals; negative bias "
+                        "means it tends to project too few."
+                    )
+
+        except Exception as exc:
+            st.error(
+                "Historical model performance "
+                f"could not be loaded: {exc}"
+            )
+
+
+        # ============================================================
+        # V1 VS. V2 — FAIR HEAD-TO-HEAD MODEL COMPARISON
+        # ============================================================
+
+        st.divider()
+        st.html("""
+        <div class="ff-section-title">
+            🧪 V1 VS. V2 MODEL COMPARISON
+        </div>
+        """)
+        st.caption(
+            "A fair head-to-head comparison uses only completed games with "
+            "predictions from both models at the same snapshot stage. "
+            "Lower MAE and RMSE are better."
+        )
+
+        try:
+            head_to_head_source = load_game_accuracy_details()
+        except Exception as exc:
+            head_to_head_source = pd.DataFrame()
+            st.warning(f"Model comparison could not load: {exc}")
+
+        if head_to_head_source.empty:
+            st.info("No completed games with saved model predictions are available yet.")
+        else:
+            h2h = head_to_head_source.copy()
+            required = {
+                "game_id", "game_date", "model_version", "snapshot_type",
+                "projected_total", "actual_total"
+            }
+            missing = required - set(h2h.columns)
+
+            if missing:
+                st.warning("Model comparison is missing required fields: " + ", ".join(sorted(missing)))
+            else:
+                h2h["game_id"] = h2h["game_id"].astype(str)
+                h2h["game_date"] = pd.to_datetime(h2h["game_date"], errors="coerce")
+                for field in ("projected_total", "actual_total"):
+                    h2h[field] = pd.to_numeric(h2h[field], errors="coerce")
+                h2h = h2h.dropna(
+                    subset=["game_date", "projected_total", "actual_total"]
+                ).copy()
+
+                model_names = sorted(h2h["model_version"].dropna().astype(str).unique())
+                snapshot_names = [
+                    snap for snap in ("FINAL PREGAME", "EARLY")
+                    if snap in set(h2h["snapshot_type"].dropna())
+                ]
+
+                if len(model_names) < 2 or not snapshot_names:
+                    st.info("At least two models with matching completed-game predictions are required.")
+                else:
+                    mc1, mc2, mc3 = st.columns([1.2, 1.2, 1])
+                    with mc1:
+                        first_model = st.selectbox(
+                            "First model", model_names,
+                            index=model_names.index("v1_goalie_adjusted")
+                            if "v1_goalie_adjusted" in model_names else 0,
+                            key="h2h_first_model",
+                        )
+                    with mc2:
+                        second_model = st.selectbox(
+                            "Second model", model_names,
+                            index=model_names.index("v2_recent5_w20")
+                            if "v2_recent5_w20" in model_names else min(1, len(model_names) - 1),
+                            key="h2h_second_model",
+                        )
+                    with mc3:
+                        selected_stage = st.selectbox(
+                            "Snapshot stage", snapshot_names, key="h2h_snapshot"
+                        )
+
+                    if first_model == second_model:
+                        st.info("Choose two different models to compare.")
+                    else:
+                        comparison_data = h2h.loc[
+                            h2h["model_version"].isin([first_model, second_model])
+                            & h2h["snapshot_type"].eq(selected_stage)
+                        ].copy()
+                        if "saved_at" in comparison_data.columns:
+                            comparison_data = comparison_data.sort_values("saved_at")
+                        comparison_data = comparison_data.drop_duplicates(
+                            ["game_id", "model_version"], keep="last"
+                        )
+
+                        # Pivot on game ID to guarantee exactly the same game sample.
+                        projections = comparison_data.pivot(
+                            index="game_id", columns="model_version", values="projected_total"
+                        )
+                        common_ids = projections.dropna(subset=[first_model, second_model]).index
+                        common = comparison_data.loc[
+                            comparison_data["game_id"].isin(common_ids)
+                        ].copy()
+
+                        if common.empty:
+                            st.info(
+                                "No completed games have predictions from both models "
+                                "for the selected snapshot stage."
+                            )
+                        else:
+                            game_info = (
+                                common.sort_values("game_date")
+                                .drop_duplicates("game_id")
+                                .set_index("game_id")
+                            )
+                            paired = pd.DataFrame(index=common_ids)
+                            paired["game_date"] = game_info.loc[common_ids, "game_date"]
+                            paired["actual_total"] = game_info.loc[common_ids, "actual_total"]
+                            if "matchup" in game_info.columns:
+                                paired["matchup"] = game_info.loc[common_ids, "matchup"]
+                            else:
+                                paired["matchup"] = common_ids.astype(str)
+                            paired["first_prediction"] = projections.loc[common_ids, first_model]
+                            paired["second_prediction"] = projections.loc[common_ids, second_model]
+                            paired = paired.sort_values(["game_date", "matchup"]).reset_index()
+                            paired["first_error"] = paired["first_prediction"] - paired["actual_total"]
+                            paired["second_error"] = paired["second_prediction"] - paired["actual_total"]
+                            paired["first_absolute"] = paired["first_error"].abs()
+                            paired["second_absolute"] = paired["second_error"].abs()
+                            n = len(paired)
+                            first_mae = paired["first_absolute"].mean()
+                            second_mae = paired["second_absolute"].mean()
+                            first_rmse = np.sqrt((paired["first_error"] ** 2).mean())
+                            second_rmse = np.sqrt((paired["second_error"] ** 2).mean())
+                            first_bias = paired["first_error"].mean()
+                            second_bias = paired["second_error"].mean()
+
+                            st.markdown("#### Head-to-Head Results")
+                            h1, h2, h3 = st.columns(3)
+                            h1.metric("Matched completed games", f"{n:,}")
+                            h2.metric(f"{first_model} MAE", f"{first_mae:.3f} goals")
+                            h3.metric(f"{second_model} MAE", f"{second_mae:.3f} goals")
+
+                            if np.isclose(first_mae, second_mae):
+                                st.info("Both models are tied on mean absolute error for this sample.")
+                            else:
+                                winner = first_model if first_mae < second_mae else second_model
+                                difference = abs(first_mae - second_mae)
+                                st.caption(
+                                    f"Current MAE leader: {winner} by {difference:.3f} goals per game. "
+                                    "A small sample is not proof of future predictive superiority."
+                                )
+
+                            summary = pd.DataFrame([
+                                {"Model": first_model, "Games": n, "MAE": first_mae,
+                                 "RMSE": first_rmse, "Bias": first_bias},
+                                {"Model": second_model, "Games": n, "MAE": second_mae,
+                                 "RMSE": second_rmse, "Bias": second_bias},
+                            ])
+                            st.dataframe(
+                                summary.style.format({"MAE": "{:.3f}", "RMSE": "{:.3f}", "Bias": "{:+.3f}"}),
+                                use_container_width=True, hide_index=True,
+                            )
+
+                            st.markdown("#### Cumulative Mean Absolute Error")
+                            cumulative = pd.DataFrame({
+                                "Completed games": np.arange(1, n + 1),
+                                first_model: paired["first_absolute"].cumsum().to_numpy() / np.arange(1, n + 1),
+                                second_model: paired["second_absolute"].cumsum().to_numpy() / np.arange(1, n + 1),
+                            })
+                            st.line_chart(
+                                cumulative.set_index("Completed games"),
+                                y_label="Cumulative MAE (goals)",
+                            )
+                            st.caption(
+                                "Each point includes one more completed game, in date/matchup order. "
+                                "Both lines always use the same games."
+                            )
+
+                            st.markdown("#### Evaluation Sample Progress")
+                            next_target = next((target for target in (30, 50, 100) if n < target), None)
+                            if next_target is None:
+                                st.success(f"{n} paired games evaluated — 100-game milestone reached.")
+                            else:
+                                st.progress(min(n / next_target, 1.0))
+                                st.caption(f"{n} of {next_target} paired games toward the next milestone.")
+
+                            st.markdown("#### Game-by-Game Model Comparison")
+                            paired_display = paired[[
+                                "game_date", "matchup", "actual_total",
+                                "first_prediction", "second_prediction",
+                                "first_absolute", "second_absolute",
+                            ]].copy()
+                            paired_display["game_date"] = paired_display["game_date"].dt.strftime("%Y-%m-%d")
+                            paired_display.columns = [
+                                "Date", "Matchup", "Actual Total",
+                                f"{first_model} Projection", f"{second_model} Projection",
+                                f"{first_model} Absolute Error", f"{second_model} Absolute Error",
+                            ]
+                            st.dataframe(
+                                paired_display, use_container_width=True, hide_index=True,
+                                column_config={
+                                    name: st.column_config.NumberColumn(name, format="%.2f")
+                                    for name in paired_display.columns[3:]
+                                },
+                            )
+                            st.download_button(
+                                "⬇️ Export Head-to-Head Comparison CSV",
+                                data=paired_display.to_csv(index=False),
+                                file_name="frozen_forecast_model_comparison.csv",
+                                mime="text/csv",
+                                use_container_width=True,
+                            )
+
+
+        # ============================================================
+        # GAME-BY-GAME ACCURACY TRACKER
+        # ============================================================
+
+        st.divider()
+
+        st.html("""
+        <div class="ff-section-title">
+            🎯 GAME-BY-GAME ACCURACY TRACKER
+        </div>
+        """)
+
+        st.caption(
+            "Compare frozen pregame predictions with official "
+            "NHL final scores. Filters and rankings use "
+            "completed games only."
+        )
+
+        try:
+            details = load_game_accuracy_details()
+
+        except Exception as exc:
+            details = pd.DataFrame()
+
+            st.warning(
+                "Game-by-game accuracy data "
+                f"could not be loaded: {exc}"
+            )
+
+
+        if details.empty:
+            st.info(
+                "No completed games with matching saved "
+                "predictions are available yet."
+            )
+
+        else:
+            details = details.copy()
+
+            numeric_columns = [
+                "projected_total",
+                "actual_total",
+                "absolute_error",
+                "prediction_error",
+            ]
+
+            for column in numeric_columns:
+                details[column] = pd.to_numeric(
+                    details[column],
+                    errors="coerce"
+                )
+
+            details["game_date"] = pd.to_datetime(
+                details["game_date"],
+                errors="coerce"
+            )
+
+            details = details.dropna(
+                subset=[
+                    "game_date",
+                    "projected_total",
+                    "actual_total",
+                    "absolute_error",
+                ]
+            )
+
+            if details.empty:
+                st.info(
+                    "No valid completed-game accuracy "
+                    "records are available yet."
+                )
+
+            else:
+
+                # ====================================================
+                # FILTER OPTIONS
+                # ====================================================
+
+                model_options = sorted(
+                    details["model_version"]
+                    .dropna()
+                    .astype(str)
+                    .unique()
+                    .tolist()
+                )
+
+                available_snapshots = (
+                    details["snapshot_type"]
+                    .dropna()
+                    .astype(str)
+                    .unique()
+                    .tolist()
+                )
+
+                snapshot_options = [
+                    item
+                    for item in (
+                        "FINAL PREGAME",
+                        "EARLY"
+                    )
+                    if item in available_snapshots
+                ]
+
+                snapshot_options += sorted(
+                    set(available_snapshots)
+                    - set(snapshot_options)
+                )
+
+                f1, f2, f3 = st.columns(
+                    [1.2, 1.2, 1]
+                )
+
+                with f1:
+                    accuracy_selected_model = st.selectbox(
+                        "Model version",
+                        model_options,
+                        key="accuracy_model"
+                    )
+
+                with f2:
+                    selected_snapshot = st.selectbox(
+                        "Snapshot",
+                        snapshot_options,
+                        key="accuracy_snapshot"
+                    )
+
+                with f3:
+                    dates = sorted(
+                        details["game_date"]
+                        .dt.date
+                        .unique()
+                        .tolist(),
+                        reverse=True
+                    )
+
+                    date_choice = st.selectbox(
+                        "Game date",
+                        ["All dates"] + dates,
+                        key="accuracy_date"
+                    )
+
+                # ====================================================
+                # APPLY FILTERS
+                # ====================================================
+
+                filtered = details.loc[
+                    (
+                        details["model_version"].astype(str)
+                        == accuracy_selected_model
+                    )
+                    &
+                    (
+                        details["snapshot_type"].astype(str)
+                        == selected_snapshot
+                    )
+                ].copy()
+
+                if date_choice != "All dates":
+                    filtered = filtered.loc[
+                        filtered["game_date"].dt.date
+                        == date_choice
+                    ].copy()
+
+                if "saved_at" in filtered.columns:
+                    filtered = filtered.sort_values(
+                        "saved_at",
+                        ascending=False
+                    )
+
+                filtered = filtered.drop_duplicates(
+                    subset=["game_id"],
+                    keep="first"
+                )
+
+                filtered["prediction_error"] = (
+                    filtered["projected_total"]
+                    - filtered["actual_total"]
+                )
+
+                filtered["absolute_error"] = (
+                    filtered["prediction_error"].abs()
+                )
+
+                if filtered.empty:
+                    st.info(
+                        "No completed games match these filters."
+                    )
+
+                else:
+
+                    # ================================================
+                    # ACCURACY METRICS
+                    # ================================================
+
+                    count = len(filtered)
+
+                    mae = (
+                        filtered["absolute_error"].mean()
+                    )
+
+                    rmse = np.sqrt(
+                        (
+                            filtered["prediction_error"] ** 2
+                        ).mean()
+                    )
+
+                    bias = (
+                        filtered["prediction_error"].mean()
+                    )
+
+                    k1, k2, k3, k4 = st.columns(4)
+
+                    k1.metric(
+                        "Completed Games",
+                        f"{count:,}"
+                    )
+
+                    k2.metric(
+                        "Mean Absolute Error",
+                        f"{mae:.2f} goals"
+                    )
+
+                    k3.metric(
+                        "RMSE",
+                        f"{rmse:.2f} goals"
+                    )
+
+                    k4.metric(
+                        "Prediction Bias",
+                        f"{bias:+.2f} goals"
+                    )
+
+                    # ================================================
+                    # BEST AND WORST PREDICTIONS
+                    # ================================================
+
+                    best_game = filtered.loc[
+                        filtered["absolute_error"].idxmin()
                     ]
 
-                    display_columns = [
-                        col for col in display_columns
-                        if col in comparison.columns
+                    worst_game = filtered.loc[
+                        filtered["absolute_error"].idxmax()
                     ]
+
+                    b1, b2 = st.columns(2)
+
+                    with b1:
+                        st.success(
+                            f'Closest prediction: '
+                            f'{best_game["matchup"]} — '
+                            f'{best_game["absolute_error"]:.2f} '
+                            f'goals off'
+                        )
+
+                    with b2:
+                        st.warning(
+                            f'Largest miss: '
+                            f'{worst_game["matchup"]} — '
+                            f'{worst_game["absolute_error"]:.2f} '
+                            f'goals off'
+                        )
+
+                    # ================================================
+                    # INDIVIDUAL GAME RESULTS
+                    # ================================================
+
+                    st.markdown(
+                        "#### Individual Game Results"
+                    )
+
+                    show = filtered.sort_values(
+                        [
+                            "game_date",
+                            "absolute_error"
+                        ],
+                        ascending=[
+                            False,
+                            False
+                        ]
+                    ).copy()
+
+                    show["game_date"] = (
+                        show["game_date"]
+                        .dt.strftime("%Y-%m-%d")
+                    )
+
+                    column_names = {
+                        "game_date": "Date",
+                        "matchup": "Matchup",
+                        "projected_total": "Projected",
+                        "actual_total": "Actual",
+                        "prediction_error": "Signed Error",
+                        "absolute_error": "Absolute Error",
+                        "prediction_direction": "Direction",
+                        "goalie_reliability": "Goalie Reliability",
+                    }
+
+                    available_columns = [
+                        col for col in column_names
+                        if col in show.columns
+                    ]
+
+                    visible = (
+                        show[available_columns]
+                        .rename(columns=column_names)
+                    )
 
                     st.dataframe(
-                        comparison[display_columns],
+                        visible.style.format({
+                            "Projected": "{:.2f}",
+                            "Actual": "{:.0f}",
+                            "Signed Error": "{:+.2f}",
+                            "Absolute Error": "{:.2f}",
+                        }),
                         use_container_width=True,
                         hide_index=True
                     )
 
-                    chart_data = comparison[
+                    # ================================================
+                    # NEW: PROJECTED VS ACTUAL GOALS
+                    # ================================================
+
+                    st.markdown(
+                        "#### Projected vs. Actual Goals"
+                    )
+
+                    comparison_chart = filtered[
                         [
-                            "model_version",
-                            "snapshot_type",
-                            "mae"
+                            "game_date",
+                            "matchup",
+                            "projected_total",
+                            "actual_total"
                         ]
                     ].copy()
 
-                    chart_data["Group"] = (
-                        chart_data["snapshot_type"].astype(str)
+                    comparison_chart["Game"] = (
+                        comparison_chart["game_date"]
+                        .dt.strftime("%m/%d")
                         + " | "
-                        + chart_data["model_version"].astype(str)
+                        + comparison_chart["matchup"].astype(str)
                     )
 
+                    comparison_chart = (
+                        comparison_chart.sort_values(
+                            [
+                                "game_date",
+                                "matchup"
+                            ]
+                        )
+                    )
+
+                    comparison_chart = (
+                        comparison_chart.rename(
+                            columns={
+                                "projected_total":
+                                    "Projected Goals",
+                                "actual_total":
+                                    "Actual Goals"
+                            }
+                        )
+                    )
+
+                    st.line_chart(
+                        comparison_chart.set_index("Game")[
+                            [
+                                "Projected Goals",
+                                "Actual Goals"
+                            ]
+                        ],
+                        y_label="Total Goals"
+                    )
+
+                    st.caption(
+                        "The projected line represents Frozen "
+                        "Forecast's pregame estimate. "
+                        "The actual line represents the official "
+                        "final total. Larger gaps indicate "
+                        "larger prediction errors."
+                    )
+
+                    # ================================================
+                    # PREDICTION ERROR BY MATCHUP
+                    # ================================================
+
                     st.markdown(
-                        "#### Mean Absolute Error by Snapshot"
+                        "#### Prediction Error by Matchup"
+                    )
+
+                    chart = show.sort_values(
+                        "absolute_error",
+                        ascending=False
+                    ).copy()
+
+                    chart["Game"] = (
+                        chart["game_date"].astype(str)
+                        + " · "
+                        + chart["matchup"].astype(str)
+                    )
+
+                    chart = (
+                        chart.set_index("Game")[
+                            ["absolute_error"]
+                        ]
+                        .rename(
+                            columns={
+                                "absolute_error":
+                                    "Absolute Error (goals)"
+                            }
+                        )
                     )
 
                     st.bar_chart(
-                        chart_data.set_index("Group")[["mae"]],
-                        y_label="Mean absolute error (goals)"
+                        chart,
+                        horizontal=True
                     )
 
-                st.markdown(
-                    "#### How to Read These Metrics"
+                    # ================================================
+                    # EXPORT ACCURACY DATA
+                    # ================================================
+
+                    st.download_button(
+                        "⬇️ Export Game-by-Game Accuracy CSV",
+                        data=show.to_csv(index=False),
+                        file_name=(
+                            "frozen_forecast_game_accuracy.csv"
+                        ),
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+
+                    st.caption(
+                        "Signed error = projected minus actual. "
+                        "Positive means overprediction; negative "
+                        "means underprediction. Snapshot comparisons "
+                        "should use the same completed games for "
+                        "a fair head-to-head evaluation."
+                    )
+
+
+        # ============================================================
+        # WINNER PREDICTION ACCURACY TRACKER
+        # ============================================================
+
+        @st.cache_data(ttl=600)
+        def load_winner_prediction_records():
+            """Read frozen predictions and final scores; never update either."""
+            client = get_supabase_client()
+
+            def fetch_all(table_name, columns="*"):
+                records = []
+                page_size = 1000
+                for offset in range(0, 100000, page_size):
+                    response = (
+                        client.table(table_name)
+                        .select(columns)
+                        .range(offset, offset + page_size - 1)
+                        .execute()
+                    )
+                    batch = response.data or []
+                    records.extend(batch)
+                    if len(batch) < page_size:
+                        break
+                return pd.DataFrame(records)
+
+            predictions = fetch_all("predictions")
+            if predictions.empty:
+                return pd.DataFrame(), "No saved predictions yet."
+
+            required_predictions = {
+                "game_id", "game_date", "model_version", "snapshot_type",
+                "away_team", "home_team", "away_win_probability",
+                "home_win_probability", "projected_winner",
+            }
+            missing = required_predictions - set(predictions.columns)
+            if missing:
+                return pd.DataFrame(), (
+                    "Prediction fields missing: " + ", ".join(sorted(missing))
                 )
 
-                st.caption(
-                    "MAE is the average absolute difference "
-                    "between projected and actual total goals. "
-                    "RMSE penalizes larger errors more heavily. "
-                    "Positive bias means the model tends to "
-                    "project too many goals; negative bias "
-                    "means it tends to project too few."
-                )
+            # The score table name can be overridden in Streamlit secrets.
+            # Try common names for compatibility with existing Supabase setups.
+            configured = st.secrets.get(
+                "RESULTS_TABLE", os.environ.get("RESULTS_TABLE", "")
+            )
+            candidates = list(dict.fromkeys(
+                [name for name in (configured, "results", "game_results", "nhl_results") if name]
+            ))
+            scores = None
+            errors = []
+            for table_name in candidates:
+                try:
+                    candidate = fetch_all(table_name)
+                    if candidate.empty:
+                        scores = candidate
+                        break
+                    if {"game_id", "away_goals", "home_goals"}.issubset(candidate.columns):
+                        scores = candidate
+                        break
+                    errors.append(f"{table_name}: missing game_id/away_goals/home_goals")
+                except Exception as exc:
+                    errors.append(f"{table_name}: {exc}")
 
-    except Exception as exc:
-        st.error(
-            "Historical model performance "
-            f"could not be loaded: {exc}"
+            if scores is None:
+                return pd.DataFrame(), (
+                    "Could not find the completed-game score table. "
+                    "Set RESULTS_TABLE in Streamlit secrets to its exact name. "
+                    + " | ".join(errors)
+                )
+            if scores.empty:
+                return pd.DataFrame(), "Waiting for completed-game scores."
+
+            scores = scores.copy()
+            scores["game_id"] = scores["game_id"].astype(str)
+            scores["away_goals"] = pd.to_numeric(scores["away_goals"], errors="coerce")
+            scores["home_goals"] = pd.to_numeric(scores["home_goals"], errors="coerce")
+            scores = scores.dropna(subset=["away_goals", "home_goals"])
+            if "updated_at" in scores.columns:
+                scores = scores.sort_values("updated_at")
+            scores = scores.drop_duplicates("game_id", keep="last")
+
+            predictions = predictions.copy()
+            predictions["game_id"] = predictions["game_id"].astype(str)
+            for col in ("away_win_probability", "home_win_probability"):
+                predictions[col] = pd.to_numeric(predictions[col], errors="coerce")
+            if "saved_at" in predictions.columns:
+                predictions = predictions.sort_values("saved_at")
+            predictions = predictions.drop_duplicates(
+                ["game_id", "model_version", "snapshot_type"], keep="last"
+            )
+
+            joined = predictions.merge(
+                scores[["game_id", "away_goals", "home_goals"]],
+                on="game_id", how="inner", validate="many_to_one"
+            )
+            if joined.empty:
+                return pd.DataFrame(), "No completed games match saved predictions yet."
+
+            # NHL official final scores include OT/SO winners. Do not infer a
+            # winner from tied scores, if such a record is accidentally present.
+            joined = joined.loc[joined["away_goals"] != joined["home_goals"]].copy()
+            joined = joined.dropna(subset=["away_win_probability", "home_win_probability"])
+            joined = joined.loc[
+                joined["away_win_probability"].between(0, 1)
+                & joined["home_win_probability"].between(0, 1)
+                & ((joined["away_win_probability"] + joined["home_win_probability"] - 1).abs() < 0.01)
+            ].copy()
+            if joined.empty:
+                return pd.DataFrame(), "Completed scores exist, but no valid winner probabilities match."
+
+            joined["actual_winner"] = np.where(
+                joined["away_goals"] > joined["home_goals"],
+                joined["away_team"], joined["home_team"]
+            )
+            joined["actual_away_win"] = (
+                joined["actual_winner"] == joined["away_team"]
+            ).astype(int)
+            joined["winner_correct"] = np.where(
+                joined["projected_winner"].isin(["TOSS-UP", "TIE", ""])
+                | joined["projected_winner"].isna(),
+                np.nan,
+                (joined["projected_winner"] == joined["actual_winner"]).astype(float)
+            )
+            joined["brier_score"] = (
+                joined["away_win_probability"] - joined["actual_away_win"]
+            ) ** 2
+            joined["matchup"] = joined["away_team"] + " @ " + joined["home_team"]
+            return joined, None
+
+
+        st.divider()
+        st.html('''
+        <div class="ff-section-title">🏆 WINNER PREDICTION ACCURACY</div>
+        ''')
+        st.caption(
+            "Compare frozen NHL winner picks against official final scores. "
+            "Brier score measures probability accuracy (lower is better). "
+            "Only completed games with saved probabilities are included."
         )
 
+        try:
+            winner_records, winner_message = load_winner_prediction_records()
+        except Exception as exc:
+            winner_records = pd.DataFrame()
+            winner_message = f"Unable to load winner accuracy: {exc}"
 
-    # ============================================================
-    # V1 VS. V2 — FAIR HEAD-TO-HEAD MODEL COMPARISON
-    # ============================================================
-
-    st.divider()
-    st.html("""
-    <div class="ff-section-title">
-        🧪 V1 VS. V2 MODEL COMPARISON
-    </div>
-    """)
-    st.caption(
-        "A fair head-to-head comparison uses only completed games with "
-        "predictions from both models at the same snapshot stage. "
-        "Lower MAE and RMSE are better."
-    )
-
-    try:
-        head_to_head_source = load_game_accuracy_details()
-    except Exception as exc:
-        head_to_head_source = pd.DataFrame()
-        st.warning(f"Model comparison could not load: {exc}")
-
-    if head_to_head_source.empty:
-        st.info("No completed games with saved model predictions are available yet.")
-    else:
-        h2h = head_to_head_source.copy()
-        required = {
-            "game_id", "game_date", "model_version", "snapshot_type",
-            "projected_total", "actual_total"
-        }
-        missing = required - set(h2h.columns)
-
-        if missing:
-            st.warning("Model comparison is missing required fields: " + ", ".join(sorted(missing)))
+        if winner_records.empty:
+            st.info(winner_message or "No completed winner predictions available yet.")
         else:
-            h2h["game_id"] = h2h["game_id"].astype(str)
-            h2h["game_date"] = pd.to_datetime(h2h["game_date"], errors="coerce")
-            for field in ("projected_total", "actual_total"):
-                h2h[field] = pd.to_numeric(h2h[field], errors="coerce")
-            h2h = h2h.dropna(
-                subset=["game_date", "projected_total", "actual_total"]
-            ).copy()
-
-            model_names = sorted(h2h["model_version"].dropna().astype(str).unique())
-            snapshot_names = [
-                snap for snap in ("FINAL PREGAME", "EARLY")
-                if snap in set(h2h["snapshot_type"].dropna())
+            winner_models = sorted(winner_records["model_version"].dropna().unique().tolist())
+            winner_stages = [
+                x for x in ("FINAL PREGAME", "EARLY")
+                if x in set(winner_records["snapshot_type"].dropna())
             ]
-
-            if len(model_names) < 2 or not snapshot_names:
-                st.info("At least two models with matching completed-game predictions are required.")
+            if not winner_stages:
+                st.info("No EARLY or FINAL PREGAME winner predictions are available.")
             else:
-                mc1, mc2, mc3 = st.columns([1.2, 1.2, 1])
-                with mc1:
-                    first_model = st.selectbox(
-                        "First model", model_names,
-                        index=model_names.index("v1_goalie_adjusted")
-                        if "v1_goalie_adjusted" in model_names else 0,
-                        key="h2h_first_model",
-                    )
-                with mc2:
-                    second_model = st.selectbox(
-                        "Second model", model_names,
-                        index=model_names.index("v2_recent5_w20")
-                        if "v2_recent5_w20" in model_names else min(1, len(model_names) - 1),
-                        key="h2h_second_model",
-                    )
-                with mc3:
-                    selected_stage = st.selectbox(
-                        "Snapshot stage", snapshot_names, key="h2h_snapshot"
-                    )
+                stage = st.selectbox(
+                    "Winner prediction snapshot", winner_stages,
+                    key="winner_accuracy_stage"
+                )
+                staged = winner_records.loc[
+                    winner_records["snapshot_type"].eq(stage)
+                ].copy()
 
-                if first_model == second_model:
-                    st.info("Choose two different models to compare.")
+                # Overall performance: each model uses ALL its completed games
+                # for the selected snapshot, not just games shared with other models.
+                st.markdown("#### Overall Historical Winner Accuracy")
+                st.caption(
+                    "Each model is evaluated on all its available completed games "
+                    "for this snapshot. Sample sizes may differ."
+                )
+
+                overall_rows = []
+                for model, group in staged.groupby("model_version"):
+                    group = group.drop_duplicates("game_id")
+                    graded = group.dropna(subset=["winner_correct"])
+                    overall_rows.append({
+                        "Model": model,
+                        "Completed games": group["game_id"].nunique(),
+                        "Graded picks": len(graded),
+                        "Correct picks": int(graded["winner_correct"].sum()),
+                        "Win accuracy": graded["winner_correct"].mean() if len(graded) else np.nan,
+                        "Brier score": group["brier_score"].mean(),
+                    })
+
+                overall_df = pd.DataFrame(overall_rows).sort_values(
+                    ["Brier score", "Completed games"], ascending=[True, False]
+                )
+                st.dataframe(
+                    overall_df.style.format({
+                        "Win accuracy": "{:.1%}", "Brier score": "{:.4f}"
+                    }, na_rep="—"),
+                    use_container_width=True, hide_index=True,
+                )
+                st.caption(
+                    "Brier score: lower is better; 0.25 is the benchmark for a "
+                    "constant 50/50 forecast in a balanced binary outcome. "
+                    "These are descriptive results, not evidence of calibrated probabilities."
+                )
+
+                # Fair head-to-head: restrict both models to the exact same game IDs.
+                st.markdown("#### Head-to-Head Winner Accuracy — Shared Games")
+                if len(winner_models) < 2:
+                    st.info("At least two models are needed for a head-to-head comparison.")
                 else:
-                    comparison_data = h2h.loc[
-                        h2h["model_version"].isin([first_model, second_model])
-                        & h2h["snapshot_type"].eq(selected_stage)
-                    ].copy()
-                    if "saved_at" in comparison_data.columns:
-                        comparison_data = comparison_data.sort_values("saved_at")
-                    comparison_data = comparison_data.drop_duplicates(
-                        ["game_id", "model_version"], keep="last"
-                    )
-
-                    # Pivot on game ID to guarantee exactly the same game sample.
-                    projections = comparison_data.pivot(
-                        index="game_id", columns="model_version", values="projected_total"
-                    )
-                    common_ids = projections.dropna(subset=[first_model, second_model]).index
-                    common = comparison_data.loc[
-                        comparison_data["game_id"].isin(common_ids)
-                    ].copy()
-
-                    if common.empty:
-                        st.info(
-                            "No completed games have predictions from both models "
-                            "for the selected snapshot stage."
+                    h2h_first, h2h_second = st.columns(2)
+                    with h2h_first:
+                        first_winner_model = st.selectbox(
+                            "First model", winner_models,
+                            index=winner_models.index("v1_goalie_adjusted")
+                            if "v1_goalie_adjusted" in winner_models else 0,
+                            key="winner_h2h_first",
                         )
+                    with h2h_second:
+                        second_winner_model = st.selectbox(
+                            "Second model", winner_models,
+                            index=winner_models.index("v2_recent5_w20")
+                            if "v2_recent5_w20" in winner_models else min(1, len(winner_models) - 1),
+                            key="winner_h2h_second",
+                        )
+
+                    if first_winner_model == second_winner_model:
+                        st.info("Select two different models for a fair comparison.")
                     else:
-                        game_info = (
-                            common.sort_values("game_date")
-                            .drop_duplicates("game_id")
-                            .set_index("game_id")
-                        )
-                        paired = pd.DataFrame(index=common_ids)
-                        paired["game_date"] = game_info.loc[common_ids, "game_date"]
-                        paired["actual_total"] = game_info.loc[common_ids, "actual_total"]
-                        if "matchup" in game_info.columns:
-                            paired["matchup"] = game_info.loc[common_ids, "matchup"]
-                        else:
-                            paired["matchup"] = common_ids.astype(str)
-                        paired["first_prediction"] = projections.loc[common_ids, first_model]
-                        paired["second_prediction"] = projections.loc[common_ids, second_model]
-                        paired = paired.sort_values(["game_date", "matchup"]).reset_index()
-                        paired["first_error"] = paired["first_prediction"] - paired["actual_total"]
-                        paired["second_error"] = paired["second_prediction"] - paired["actual_total"]
-                        paired["first_absolute"] = paired["first_error"].abs()
-                        paired["second_absolute"] = paired["second_error"].abs()
-                        n = len(paired)
-                        first_mae = paired["first_absolute"].mean()
-                        second_mae = paired["second_absolute"].mean()
-                        first_rmse = np.sqrt((paired["first_error"] ** 2).mean())
-                        second_rmse = np.sqrt((paired["second_error"] ** 2).mean())
-                        first_bias = paired["first_error"].mean()
-                        second_bias = paired["second_error"].mean()
+                        first_games = set(staged.loc[
+                            staged["model_version"].eq(first_winner_model), "game_id"
+                        ])
+                        second_games = set(staged.loc[
+                            staged["model_version"].eq(second_winner_model), "game_id"
+                        ])
+                        common_games = first_games & second_games
+                        paired_rows = staged.loc[
+                            staged["game_id"].isin(common_games)
+                            & staged["model_version"].isin([first_winner_model, second_winner_model])
+                        ].copy()
+                        paired_rows = paired_rows.drop_duplicates(["game_id", "model_version"])
 
-                        st.markdown("#### Head-to-Head Results")
-                        h1, h2, h3 = st.columns(3)
-                        h1.metric("Matched completed games", f"{n:,}")
-                        h2.metric(f"{first_model} MAE", f"{first_mae:.3f} goals")
-                        h3.metric(f"{second_model} MAE", f"{second_mae:.3f} goals")
-
-                        if np.isclose(first_mae, second_mae):
-                            st.info("Both models are tied on mean absolute error for this sample.")
+                        if paired_rows.empty:
+                            st.info("No completed games are shared by these models at this snapshot stage.")
                         else:
-                            winner = first_model if first_mae < second_mae else second_model
-                            difference = abs(first_mae - second_mae)
+                            head_rows = []
+                            for model in [first_winner_model, second_winner_model]:
+                                group = paired_rows.loc[paired_rows["model_version"].eq(model)]
+                                graded = group.dropna(subset=["winner_correct"])
+                                head_rows.append({
+                                    "Model": model,
+                                    "Shared games": len(common_games),
+                                    "Graded picks": len(graded),
+                                    "Correct picks": int(graded["winner_correct"].sum()),
+                                    "Win accuracy": graded["winner_correct"].mean() if len(graded) else np.nan,
+                                    "Brier score": group["brier_score"].mean(),
+                                })
+                            head_df = pd.DataFrame(head_rows)
+                            st.dataframe(
+                                head_df.style.format({
+                                    "Win accuracy": "{:.1%}", "Brier score": "{:.4f}"
+                                }, na_rep="—"),
+                                use_container_width=True, hide_index=True,
+                            )
                             st.caption(
-                                f"Current MAE leader: {winner} by {difference:.3f} goals per game. "
-                                "A small sample is not proof of future predictive superiority."
+                                f"Fair comparison: {len(common_games)} identical completed games. "
+                                "TOSS-UP picks are excluded from win accuracy but included in Brier score. "
+                                "A small shared sample cannot establish which model is superior."
                             )
 
-                        summary = pd.DataFrame([
-                            {"Model": first_model, "Games": n, "MAE": first_mae,
-                             "RMSE": first_rmse, "Bias": first_bias},
-                            {"Model": second_model, "Games": n, "MAE": second_mae,
-                             "RMSE": second_rmse, "Bias": second_bias},
-                        ])
-                        st.dataframe(
-                            summary.style.format({"MAE": "{:.3f}", "RMSE": "{:.3f}", "Bias": "{:+.3f}"}),
-                            use_container_width=True, hide_index=True,
-                        )
-
-                        st.markdown("#### Cumulative Mean Absolute Error")
-                        cumulative = pd.DataFrame({
-                            "Completed games": np.arange(1, n + 1),
-                            first_model: paired["first_absolute"].cumsum().to_numpy() / np.arange(1, n + 1),
-                            second_model: paired["second_absolute"].cumsum().to_numpy() / np.arange(1, n + 1),
-                        })
-                        st.line_chart(
-                            cumulative.set_index("Completed games"),
-                            y_label="Cumulative MAE (goals)",
-                        )
-                        st.caption(
-                            "Each point includes one more completed game, in date/matchup order. "
-                            "Both lines always use the same games."
-                        )
-
-                        st.markdown("#### Evaluation Sample Progress")
-                        next_target = next((target for target in (30, 50, 100) if n < target), None)
-                        if next_target is None:
-                            st.success(f"{n} paired games evaluated — 100-game milestone reached.")
-                        else:
-                            st.progress(min(n / next_target, 1.0))
-                            st.caption(f"{n} of {next_target} paired games toward the next milestone.")
-
-                        st.markdown("#### Game-by-Game Model Comparison")
-                        paired_display = paired[[
-                            "game_date", "matchup", "actual_total",
-                            "first_prediction", "second_prediction",
-                            "first_absolute", "second_absolute",
-                        ]].copy()
-                        paired_display["game_date"] = paired_display["game_date"].dt.strftime("%Y-%m-%d")
-                        paired_display.columns = [
-                            "Date", "Matchup", "Actual Total",
-                            f"{first_model} Projection", f"{second_model} Projection",
-                            f"{first_model} Absolute Error", f"{second_model} Absolute Error",
-                        ]
-                        st.dataframe(
-                            paired_display, use_container_width=True, hide_index=True,
-                            column_config={
-                                name: st.column_config.NumberColumn(name, format="%.2f")
-                                for name in paired_display.columns[3:]
-                            },
-                        )
-                        st.download_button(
-                            "⬇️ Export Head-to-Head Comparison CSV",
-                            data=paired_display.to_csv(index=False),
-                            file_name="frozen_forecast_model_comparison.csv",
-                            mime="text/csv",
-                            use_container_width=True,
-                        )
-
-
-    # ============================================================
-    # GAME-BY-GAME ACCURACY TRACKER
-    # ============================================================
-
-    st.divider()
-
-    st.html("""
-    <div class="ff-section-title">
-        🎯 GAME-BY-GAME ACCURACY TRACKER
-    </div>
-    """)
-
-    st.caption(
-        "Compare frozen pregame predictions with official "
-        "NHL final scores. Filters and rankings use "
-        "completed games only."
-    )
-
-    try:
-        details = load_game_accuracy_details()
-
-    except Exception as exc:
-        details = pd.DataFrame()
-
-        st.warning(
-            "Game-by-game accuracy data "
-            f"could not be loaded: {exc}"
-        )
-
-
-    if details.empty:
-        st.info(
-            "No completed games with matching saved "
-            "predictions are available yet."
-        )
-
-    else:
-        details = details.copy()
-
-        numeric_columns = [
-            "projected_total",
-            "actual_total",
-            "absolute_error",
-            "prediction_error",
-        ]
-
-        for column in numeric_columns:
-            details[column] = pd.to_numeric(
-                details[column],
-                errors="coerce"
-            )
-
-        details["game_date"] = pd.to_datetime(
-            details["game_date"],
-            errors="coerce"
-        )
-
-        details = details.dropna(
-            subset=[
-                "game_date",
-                "projected_total",
-                "actual_total",
-                "absolute_error",
-            ]
-        )
-
-        if details.empty:
-            st.info(
-                "No valid completed-game accuracy "
-                "records are available yet."
-            )
-
-        else:
-
-            # ====================================================
-            # FILTER OPTIONS
-            # ====================================================
-
-            model_options = sorted(
-                details["model_version"]
-                .dropna()
-                .astype(str)
-                .unique()
-                .tolist()
-            )
-
-            available_snapshots = (
-                details["snapshot_type"]
-                .dropna()
-                .astype(str)
-                .unique()
-                .tolist()
-            )
-
-            snapshot_options = [
-                item
-                for item in (
-                    "FINAL PREGAME",
-                    "EARLY"
-                )
-                if item in available_snapshots
-            ]
-
-            snapshot_options += sorted(
-                set(available_snapshots)
-                - set(snapshot_options)
-            )
-
-            f1, f2, f3 = st.columns(
-                [1.2, 1.2, 1]
-            )
-
-            with f1:
-                accuracy_selected_model = st.selectbox(
-                    "Model version",
-                    model_options,
-                    key="accuracy_model"
-                )
-
-            with f2:
-                selected_snapshot = st.selectbox(
-                    "Snapshot",
-                    snapshot_options,
-                    key="accuracy_snapshot"
-                )
-
-            with f3:
-                dates = sorted(
-                    details["game_date"]
-                    .dt.date
-                    .unique()
-                    .tolist(),
-                    reverse=True
-                )
-
-                date_choice = st.selectbox(
-                    "Game date",
-                    ["All dates"] + dates,
-                    key="accuracy_date"
-                )
-
-            # ====================================================
-            # APPLY FILTERS
-            # ====================================================
-
-            filtered = details.loc[
-                (
-                    details["model_version"].astype(str)
-                    == accuracy_selected_model
-                )
-                &
-                (
-                    details["snapshot_type"].astype(str)
-                    == selected_snapshot
-                )
-            ].copy()
-
-            if date_choice != "All dates":
-                filtered = filtered.loc[
-                    filtered["game_date"].dt.date
-                    == date_choice
-                ].copy()
-
-            if "saved_at" in filtered.columns:
-                filtered = filtered.sort_values(
-                    "saved_at",
-                    ascending=False
-                )
-
-            filtered = filtered.drop_duplicates(
-                subset=["game_id"],
-                keep="first"
-            )
-
-            filtered["prediction_error"] = (
-                filtered["projected_total"]
-                - filtered["actual_total"]
-            )
-
-            filtered["absolute_error"] = (
-                filtered["prediction_error"].abs()
-            )
-
-            if filtered.empty:
-                st.info(
-                    "No completed games match these filters."
-                )
-
-            else:
-
-                # ================================================
-                # ACCURACY METRICS
-                # ================================================
-
-                count = len(filtered)
-
-                mae = (
-                    filtered["absolute_error"].mean()
-                )
-
-                rmse = np.sqrt(
-                    (
-                        filtered["prediction_error"] ** 2
-                    ).mean()
-                )
-
-                bias = (
-                    filtered["prediction_error"].mean()
-                )
-
-                k1, k2, k3, k4 = st.columns(4)
-
-                k1.metric(
-                    "Completed Games",
-                    f"{count:,}"
-                )
-
-                k2.metric(
-                    "Mean Absolute Error",
-                    f"{mae:.2f} goals"
-                )
-
-                k3.metric(
-                    "RMSE",
-                    f"{rmse:.2f} goals"
-                )
-
-                k4.metric(
-                    "Prediction Bias",
-                    f"{bias:+.2f} goals"
-                )
-
-                # ================================================
-                # BEST AND WORST PREDICTIONS
-                # ================================================
-
-                best_game = filtered.loc[
-                    filtered["absolute_error"].idxmin()
-                ]
-
-                worst_game = filtered.loc[
-                    filtered["absolute_error"].idxmax()
-                ]
-
-                b1, b2 = st.columns(2)
-
-                with b1:
-                    st.success(
-                        f'Closest prediction: '
-                        f'{best_game["matchup"]} — '
-                        f'{best_game["absolute_error"]:.2f} '
-                        f'goals off'
-                    )
-
-                with b2:
-                    st.warning(
-                        f'Largest miss: '
-                        f'{worst_game["matchup"]} — '
-                        f'{worst_game["absolute_error"]:.2f} '
-                        f'goals off'
-                    )
-
-                # ================================================
-                # INDIVIDUAL GAME RESULTS
-                # ================================================
-
-                st.markdown(
-                    "#### Individual Game Results"
-                )
-
-                show = filtered.sort_values(
-                    [
-                        "game_date",
-                        "absolute_error"
-                    ],
-                    ascending=[
-                        False,
-                        False
-                    ]
-                ).copy()
-
-                show["game_date"] = (
-                    show["game_date"]
-                    .dt.strftime("%Y-%m-%d")
-                )
-
-                column_names = {
-                    "game_date": "Date",
-                    "matchup": "Matchup",
-                    "projected_total": "Projected",
-                    "actual_total": "Actual",
-                    "prediction_error": "Signed Error",
-                    "absolute_error": "Absolute Error",
-                    "prediction_direction": "Direction",
-                    "goalie_reliability": "Goalie Reliability",
-                }
-
-                available_columns = [
-                    col for col in column_names
-                    if col in show.columns
-                ]
-
-                visible = (
-                    show[available_columns]
-                    .rename(columns=column_names)
-                )
-
-                st.dataframe(
-                    visible.style.format({
-                        "Projected": "{:.2f}",
-                        "Actual": "{:.0f}",
-                        "Signed Error": "{:+.2f}",
-                        "Absolute Error": "{:.2f}",
-                    }),
-                    use_container_width=True,
-                    hide_index=True
-                )
-
-                # ================================================
-                # NEW: PROJECTED VS ACTUAL GOALS
-                # ================================================
-
-                st.markdown(
-                    "#### Projected vs. Actual Goals"
-                )
-
-                comparison_chart = filtered[
-                    [
-                        "game_date",
-                        "matchup",
-                        "projected_total",
-                        "actual_total"
-                    ]
-                ].copy()
-
-                comparison_chart["Game"] = (
-                    comparison_chart["game_date"]
-                    .dt.strftime("%m/%d")
-                    + " | "
-                    + comparison_chart["matchup"].astype(str)
-                )
-
-                comparison_chart = (
-                    comparison_chart.sort_values(
-                        [
-                            "game_date",
-                            "matchup"
-                        ]
-                    )
-                )
-
-                comparison_chart = (
-                    comparison_chart.rename(
-                        columns={
-                            "projected_total":
-                                "Projected Goals",
-                            "actual_total":
-                                "Actual Goals"
-                        }
-                    )
-                )
-
-                st.line_chart(
-                    comparison_chart.set_index("Game")[
-                        [
-                            "Projected Goals",
-                            "Actual Goals"
-                        ]
-                    ],
-                    y_label="Total Goals"
-                )
-
-                st.caption(
-                    "The projected line represents Frozen "
-                    "Forecast's pregame estimate. "
-                    "The actual line represents the official "
-                    "final total. Larger gaps indicate "
-                    "larger prediction errors."
-                )
-
-                # ================================================
-                # PREDICTION ERROR BY MATCHUP
-                # ================================================
-
-                st.markdown(
-                    "#### Prediction Error by Matchup"
-                )
-
-                chart = show.sort_values(
-                    "absolute_error",
-                    ascending=False
-                ).copy()
-
-                chart["Game"] = (
-                    chart["game_date"].astype(str)
-                    + " · "
-                    + chart["matchup"].astype(str)
-                )
-
-                chart = (
-                    chart.set_index("Game")[
-                        ["absolute_error"]
-                    ]
-                    .rename(
-                        columns={
-                            "absolute_error":
-                                "Absolute Error (goals)"
-                        }
-                    )
-                )
-
-                st.bar_chart(
-                    chart,
-                    horizontal=True
-                )
-
-                # ================================================
-                # EXPORT ACCURACY DATA
-                # ================================================
-
-                st.download_button(
-                    "⬇️ Export Game-by-Game Accuracy CSV",
-                    data=show.to_csv(index=False),
-                    file_name=(
-                        "frozen_forecast_game_accuracy.csv"
-                    ),
-                    mime="text/csv",
-                    use_container_width=True
-                )
-
-                st.caption(
-                    "Signed error = projected minus actual. "
-                    "Positive means overprediction; negative "
-                    "means underprediction. Snapshot comparisons "
-                    "should use the same completed games for "
-                    "a fair head-to-head evaluation."
-                )
-
-
-    # ============================================================
-    # WINNER PREDICTION ACCURACY TRACKER
-    # ============================================================
-
-    @st.cache_data(ttl=600)
-    def load_winner_prediction_records():
-        """Read frozen predictions and final scores; never update either."""
-        client = get_supabase_client()
-
-        def fetch_all(table_name, columns="*"):
-            records = []
-            page_size = 1000
-            for offset in range(0, 100000, page_size):
-                response = (
-                    client.table(table_name)
-                    .select(columns)
-                    .range(offset, offset + page_size - 1)
-                    .execute()
-                )
-                batch = response.data or []
-                records.extend(batch)
-                if len(batch) < page_size:
-                    break
-            return pd.DataFrame(records)
-
-        predictions = fetch_all("predictions")
-        if predictions.empty:
-            return pd.DataFrame(), "No saved predictions yet."
-
-        required_predictions = {
-            "game_id", "game_date", "model_version", "snapshot_type",
-            "away_team", "home_team", "away_win_probability",
-            "home_win_probability", "projected_winner",
-        }
-        missing = required_predictions - set(predictions.columns)
-        if missing:
-            return pd.DataFrame(), (
-                "Prediction fields missing: " + ", ".join(sorted(missing))
-            )
-
-        # The score table name can be overridden in Streamlit secrets.
-        # Try common names for compatibility with existing Supabase setups.
-        configured = st.secrets.get(
-            "RESULTS_TABLE", os.environ.get("RESULTS_TABLE", "")
-        )
-        candidates = list(dict.fromkeys(
-            [name for name in (configured, "results", "game_results", "nhl_results") if name]
-        ))
-        scores = None
-        errors = []
-        for table_name in candidates:
-            try:
-                candidate = fetch_all(table_name)
-                if candidate.empty:
-                    scores = candidate
-                    break
-                if {"game_id", "away_goals", "home_goals"}.issubset(candidate.columns):
-                    scores = candidate
-                    break
-                errors.append(f"{table_name}: missing game_id/away_goals/home_goals")
-            except Exception as exc:
-                errors.append(f"{table_name}: {exc}")
-
-        if scores is None:
-            return pd.DataFrame(), (
-                "Could not find the completed-game score table. "
-                "Set RESULTS_TABLE in Streamlit secrets to its exact name. "
-                + " | ".join(errors)
-            )
-        if scores.empty:
-            return pd.DataFrame(), "Waiting for completed-game scores."
-
-        scores = scores.copy()
-        scores["game_id"] = scores["game_id"].astype(str)
-        scores["away_goals"] = pd.to_numeric(scores["away_goals"], errors="coerce")
-        scores["home_goals"] = pd.to_numeric(scores["home_goals"], errors="coerce")
-        scores = scores.dropna(subset=["away_goals", "home_goals"])
-        if "updated_at" in scores.columns:
-            scores = scores.sort_values("updated_at")
-        scores = scores.drop_duplicates("game_id", keep="last")
-
-        predictions = predictions.copy()
-        predictions["game_id"] = predictions["game_id"].astype(str)
-        for col in ("away_win_probability", "home_win_probability"):
-            predictions[col] = pd.to_numeric(predictions[col], errors="coerce")
-        if "saved_at" in predictions.columns:
-            predictions = predictions.sort_values("saved_at")
-        predictions = predictions.drop_duplicates(
-            ["game_id", "model_version", "snapshot_type"], keep="last"
-        )
-
-        joined = predictions.merge(
-            scores[["game_id", "away_goals", "home_goals"]],
-            on="game_id", how="inner", validate="many_to_one"
-        )
-        if joined.empty:
-            return pd.DataFrame(), "No completed games match saved predictions yet."
-
-        # NHL official final scores include OT/SO winners. Do not infer a
-        # winner from tied scores, if such a record is accidentally present.
-        joined = joined.loc[joined["away_goals"] != joined["home_goals"]].copy()
-        joined = joined.dropna(subset=["away_win_probability", "home_win_probability"])
-        joined = joined.loc[
-            joined["away_win_probability"].between(0, 1)
-            & joined["home_win_probability"].between(0, 1)
-            & ((joined["away_win_probability"] + joined["home_win_probability"] - 1).abs() < 0.01)
-        ].copy()
-        if joined.empty:
-            return pd.DataFrame(), "Completed scores exist, but no valid winner probabilities match."
-
-        joined["actual_winner"] = np.where(
-            joined["away_goals"] > joined["home_goals"],
-            joined["away_team"], joined["home_team"]
-        )
-        joined["actual_away_win"] = (
-            joined["actual_winner"] == joined["away_team"]
-        ).astype(int)
-        joined["winner_correct"] = np.where(
-            joined["projected_winner"].isin(["TOSS-UP", "TIE", ""])
-            | joined["projected_winner"].isna(),
-            np.nan,
-            (joined["projected_winner"] == joined["actual_winner"]).astype(float)
-        )
-        joined["brier_score"] = (
-            joined["away_win_probability"] - joined["actual_away_win"]
-        ) ** 2
-        joined["matchup"] = joined["away_team"] + " @ " + joined["home_team"]
-        return joined, None
-
-
-    st.divider()
-    st.html('''
-    <div class="ff-section-title">🏆 WINNER PREDICTION ACCURACY</div>
-    ''')
-    st.caption(
-        "Compare frozen NHL winner picks against official final scores. "
-        "Brier score measures probability accuracy (lower is better). "
-        "Only completed games with saved probabilities are included."
-    )
-
-    try:
-        winner_records, winner_message = load_winner_prediction_records()
-    except Exception as exc:
-        winner_records = pd.DataFrame()
-        winner_message = f"Unable to load winner accuracy: {exc}"
-
-    if winner_records.empty:
-        st.info(winner_message or "No completed winner predictions available yet.")
-    else:
-        winner_models = sorted(winner_records["model_version"].dropna().unique().tolist())
-        winner_stages = [
-            x for x in ("FINAL PREGAME", "EARLY")
-            if x in set(winner_records["snapshot_type"].dropna())
-        ]
-        if not winner_stages:
-            st.info("No EARLY or FINAL PREGAME winner predictions are available.")
-        else:
-            stage = st.selectbox(
-                "Winner prediction snapshot", winner_stages,
-                key="winner_accuracy_stage"
-            )
-            staged = winner_records.loc[
-                winner_records["snapshot_type"].eq(stage)
-            ].copy()
-
-            # Overall performance: each model uses ALL its completed games
-            # for the selected snapshot, not just games shared with other models.
-            st.markdown("#### Overall Historical Winner Accuracy")
-            st.caption(
-                "Each model is evaluated on all its available completed games "
-                "for this snapshot. Sample sizes may differ."
-            )
-
-            overall_rows = []
-            for model, group in staged.groupby("model_version"):
-                group = group.drop_duplicates("game_id")
-                graded = group.dropna(subset=["winner_correct"])
-                overall_rows.append({
-                    "Model": model,
-                    "Completed games": group["game_id"].nunique(),
-                    "Graded picks": len(graded),
-                    "Correct picks": int(graded["winner_correct"].sum()),
-                    "Win accuracy": graded["winner_correct"].mean() if len(graded) else np.nan,
-                    "Brier score": group["brier_score"].mean(),
-                })
-
-            overall_df = pd.DataFrame(overall_rows).sort_values(
-                ["Brier score", "Completed games"], ascending=[True, False]
-            )
-            st.dataframe(
-                overall_df.style.format({
-                    "Win accuracy": "{:.1%}", "Brier score": "{:.4f}"
-                }, na_rep="—"),
-                use_container_width=True, hide_index=True,
-            )
-            st.caption(
-                "Brier score: lower is better; 0.25 is the benchmark for a "
-                "constant 50/50 forecast in a balanced binary outcome. "
-                "These are descriptive results, not evidence of calibrated probabilities."
-            )
-
-            # Fair head-to-head: restrict both models to the exact same game IDs.
-            st.markdown("#### Head-to-Head Winner Accuracy — Shared Games")
-            if len(winner_models) < 2:
-                st.info("At least two models are needed for a head-to-head comparison.")
-            else:
-                h2h_first, h2h_second = st.columns(2)
-                with h2h_first:
-                    first_winner_model = st.selectbox(
-                        "First model", winner_models,
-                        index=winner_models.index("v1_goalie_adjusted")
-                        if "v1_goalie_adjusted" in winner_models else 0,
-                        key="winner_h2h_first",
-                    )
-                with h2h_second:
-                    second_winner_model = st.selectbox(
-                        "Second model", winner_models,
-                        index=winner_models.index("v2_recent5_w20")
-                        if "v2_recent5_w20" in winner_models else min(1, len(winner_models) - 1),
-                        key="winner_h2h_second",
-                    )
-
-                if first_winner_model == second_winner_model:
-                    st.info("Select two different models for a fair comparison.")
-                else:
-                    first_games = set(staged.loc[
-                        staged["model_version"].eq(first_winner_model), "game_id"
-                    ])
-                    second_games = set(staged.loc[
-                        staged["model_version"].eq(second_winner_model), "game_id"
-                    ])
-                    common_games = first_games & second_games
-                    paired_rows = staged.loc[
-                        staged["game_id"].isin(common_games)
-                        & staged["model_version"].isin([first_winner_model, second_winner_model])
-                    ].copy()
-                    paired_rows = paired_rows.drop_duplicates(["game_id", "model_version"])
-
-                    if paired_rows.empty:
-                        st.info("No completed games are shared by these models at this snapshot stage.")
-                    else:
-                        head_rows = []
-                        for model in [first_winner_model, second_winner_model]:
-                            group = paired_rows.loc[paired_rows["model_version"].eq(model)]
-                            graded = group.dropna(subset=["winner_correct"])
-                            head_rows.append({
-                                "Model": model,
-                                "Shared games": len(common_games),
-                                "Graded picks": len(graded),
-                                "Correct picks": int(graded["winner_correct"].sum()),
-                                "Win accuracy": graded["winner_correct"].mean() if len(graded) else np.nan,
-                                "Brier score": group["brier_score"].mean(),
+                            comparison_detail = paired_rows[[
+                                "game_id", "game_date", "matchup", "model_version",
+                                "projected_winner", "actual_winner", "winner_correct",
+                                "away_win_probability", "brier_score"
+                            ]].copy()
+                            comparison_detail["Pick result"] = comparison_detail["winner_correct"].map(
+                                {1.0: "CORRECT", 0.0: "INCORRECT"}
+                            ).fillna("TOSS-UP")
+                            comparison_detail["Away win %"] = (
+                                comparison_detail["away_win_probability"] * 100
+                            )
+                            comparison_detail = comparison_detail.rename(columns={
+                                "game_date": "Date", "matchup": "Matchup",
+                                "model_version": "Model", "projected_winner": "Predicted winner",
+                                "actual_winner": "Actual winner", "brier_score": "Brier score",
                             })
-                        head_df = pd.DataFrame(head_rows)
-                        st.dataframe(
-                            head_df.style.format({
-                                "Win accuracy": "{:.1%}", "Brier score": "{:.4f}"
-                            }, na_rep="—"),
-                            use_container_width=True, hide_index=True,
-                        )
-                        st.caption(
-                            f"Fair comparison: {len(common_games)} identical completed games. "
-                            "TOSS-UP picks are excluded from win accuracy but included in Brier score. "
-                            "A small shared sample cannot establish which model is superior."
-                        )
+                            st.markdown("##### Shared Game Predictions")
+                            st.dataframe(
+                                comparison_detail[[
+                                    "Date", "Matchup", "Model", "Predicted winner",
+                                    "Actual winner", "Pick result", "Away win %", "Brier score"
+                                ]].sort_values(["Date", "Matchup", "Model"], ascending=[False, True, True])
+                                .style.format({"Away win %": "{:.1f}%", "Brier score": "{:.4f}"}),
+                                use_container_width=True, hide_index=True,
+                            )
 
-                        comparison_detail = paired_rows[[
-                            "game_id", "game_date", "matchup", "model_version",
-                            "projected_winner", "actual_winner", "winner_correct",
-                            "away_win_probability", "brier_score"
-                        ]].copy()
-                        comparison_detail["Pick result"] = comparison_detail["winner_correct"].map(
-                            {1.0: "CORRECT", 0.0: "INCORRECT"}
-                        ).fillna("TOSS-UP")
-                        comparison_detail["Away win %"] = (
-                            comparison_detail["away_win_probability"] * 100
-                        )
-                        comparison_detail = comparison_detail.rename(columns={
-                            "game_date": "Date", "matchup": "Matchup",
-                            "model_version": "Model", "projected_winner": "Predicted winner",
-                            "actual_winner": "Actual winner", "brier_score": "Brier score",
-                        })
-                        st.markdown("##### Shared Game Predictions")
-                        st.dataframe(
-                            comparison_detail[[
-                                "Date", "Matchup", "Model", "Predicted winner",
-                                "Actual winner", "Pick result", "Away win %", "Brier score"
-                            ]].sort_values(["Date", "Matchup", "Model"], ascending=[False, True, True])
-                            .style.format({"Away win %": "{:.1f}%", "Brier score": "{:.4f}"}),
-                            use_container_width=True, hide_index=True,
-                        )
+                st.markdown("#### Individual Winner Predictions")
+                selected_winner_model = st.selectbox(
+                    "Model to inspect", winner_models, key="winner_accuracy_model"
+                )
+                individual = staged.loc[
+                    staged["model_version"].eq(selected_winner_model)
+                ].copy()
+                if individual.empty:
+                    st.info("No completed winner predictions for this model and snapshot.")
+                else:
+                    graded = individual.dropna(subset=["winner_correct"])
+                    w1, w2, w3, w4 = st.columns(4)
+                    w1.metric("Completed games", f"{len(individual):,}")
+                    w2.metric("Correct picks", f"{int(graded['winner_correct'].sum()):,} / {len(graded):,}")
+                    w3.metric(
+                        "Winner accuracy",
+                        f"{graded['winner_correct'].mean():.1%}" if len(graded) else "—"
+                    )
+                    w4.metric("Brier score", f"{individual['brier_score'].mean():.4f}")
 
-            st.markdown("#### Individual Winner Predictions")
-            selected_winner_model = st.selectbox(
-                "Model to inspect", winner_models, key="winner_accuracy_model"
-            )
-            individual = staged.loc[
-                staged["model_version"].eq(selected_winner_model)
-            ].copy()
-            if individual.empty:
-                st.info("No completed winner predictions for this model and snapshot.")
-            else:
-                graded = individual.dropna(subset=["winner_correct"])
-                w1, w2, w3, w4 = st.columns(4)
-                w1.metric("Completed games", f"{len(individual):,}")
-                w2.metric("Correct picks", f"{int(graded['winner_correct'].sum()):,} / {len(graded):,}")
-                w3.metric(
-                    "Winner accuracy",
-                    f"{graded['winner_correct'].mean():.1%}" if len(graded) else "—"
-                )
-                w4.metric("Brier score", f"{individual['brier_score'].mean():.4f}")
+                    individual["Result"] = individual["winner_correct"].map(
+                        {1.0: "CORRECT", 0.0: "INCORRECT"}
+                    ).fillna("TOSS-UP")
+                    individual["Away win %"] = 100 * individual["away_win_probability"]
+                    individual["Home win %"] = 100 * individual["home_win_probability"]
+                    individual["Final score"] = (
+                        individual["away_goals"].astype(int).astype(str) + "–"
+                        + individual["home_goals"].astype(int).astype(str)
+                    )
+                    show_columns = [
+                        "game_date", "matchup", "Final score", "projected_winner",
+                        "actual_winner", "Away win %", "Home win %", "Result", "brier_score"
+                    ]
+                    visible = individual[show_columns].rename(columns={
+                        "game_date": "Date", "matchup": "Matchup",
+                        "projected_winner": "Projected winner",
+                        "actual_winner": "Actual winner", "brier_score": "Brier score"
+                    }).sort_values(["Date", "Matchup"], ascending=[False, True])
+                    st.dataframe(
+                        visible.style.format({
+                            "Away win %": "{:.1f}%", "Home win %": "{:.1f}%",
+                            "Brier score": "{:.4f}"
+                        }),
+                        use_container_width=True, hide_index=True
+                    )
+                    st.download_button(
+                        "⬇️ Export Winner Accuracy CSV",
+                        data=visible.to_csv(index=False),
+                        file_name=f"frozen_forecast_winners_{selected_winner_model}_{stage.replace(' ', '_')}.csv",
+                        mime="text/csv", use_container_width=True
+                    )
 
-                individual["Result"] = individual["winner_correct"].map(
-                    {1.0: "CORRECT", 0.0: "INCORRECT"}
-                ).fillna("TOSS-UP")
-                individual["Away win %"] = 100 * individual["away_win_probability"]
-                individual["Home win %"] = 100 * individual["home_win_probability"]
-                individual["Final score"] = (
-                    individual["away_goals"].astype(int).astype(str) + "–"
-                    + individual["home_goals"].astype(int).astype(str)
-                )
-                show_columns = [
-                    "game_date", "matchup", "Final score", "projected_winner",
-                    "actual_winner", "Away win %", "Home win %", "Result", "brier_score"
-                ]
-                visible = individual[show_columns].rename(columns={
-                    "game_date": "Date", "matchup": "Matchup",
-                    "projected_winner": "Projected winner",
-                    "actual_winner": "Actual winner", "brier_score": "Brier score"
-                }).sort_values(["Date", "Matchup"], ascending=[False, True])
-                st.dataframe(
-                    visible.style.format({
-                        "Away win %": "{:.1f}%", "Home win %": "{:.1f}%",
-                        "Brier score": "{:.4f}"
-                    }),
-                    use_container_width=True, hide_index=True
-                )
-                st.download_button(
-                    "⬇️ Export Winner Accuracy CSV",
-                    data=visible.to_csv(index=False),
-                    file_name=f"frozen_forecast_winners_{selected_winner_model}_{stage.replace(' ', '_')}.csv",
-                    mime="text/csv", use_container_width=True
-                )
-
-    st.caption(
-        "Win probabilities use a Poisson scoring model with a 50/50 split "
-        "of regulation ties. These probabilities are not yet historically calibrated. "
-        "Winner accuracy and goal-total MAE measure different prediction tasks."
-    )
+        st.caption(
+            "Win probabilities use a Poisson scoring model with a 50/50 split "
+            "of regulation ties. These probabilities are not yet historically calibrated. "
+            "Winner accuracy and goal-total MAE measure different prediction tasks."
+        )
 
 
     # ============================================================
