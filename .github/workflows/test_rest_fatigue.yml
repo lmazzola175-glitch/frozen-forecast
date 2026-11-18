@@ -1,0 +1,171 @@
+
+name: Test Frozen Forecast Rest and Fatigue
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze-rest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Analyze rest and back-to-back games
+        run: |
+          python - <<'PY'
+          from collections import defaultdict
+          from datetime import date, datetime
+          from zoneinfo import ZoneInfo
+          from engine import STATS, get_json, season_for
+
+          today = datetime.now(
+              ZoneInfo("America/New_York")
+          ).date()
+          season = season_for(today.isoformat())
+
+          records = []
+          start = 0
+
+          while True:
+              response = get_json(
+                  f"{STATS}/team/summary",
+                  {
+                      "isAggregate": "false",
+                      "isGame": "true",
+                      "cayenneExp": (
+                          f"gameTypeId=2 and seasonId={season}"
+                      ),
+                      "start": start,
+                      "limit": 100,
+                  },
+              )
+              batch = response.get("data", [])
+              if not batch:
+                  break
+
+              records.extend(batch)
+              start += len(batch)
+
+              if start >= int(response.get("total") or 0):
+                  break
+
+          games = defaultdict(dict)
+
+          for r in records:
+              if (
+                  r.get("gameDate") is None
+                  or r.get("homeRoad") not in ("H", "R")
+                  or r.get("goalsFor") is None
+                  or not r.get("teamFullName")
+              ):
+                  continue
+
+              d = date.fromisoformat(
+                  str(r["gameDate"])[:10]
+              )
+
+              if d >= today:
+                  continue
+
+              games[str(r["gameId"])][r["homeRoad"]] = {
+                  "team": r["teamFullName"],
+                  "date": d,
+                  "goals": int(r["goalsFor"]),
+              }
+
+          completed = [
+              (gid, g["H"], g["R"])
+              for gid, g in games.items()
+              if "H" in g and "R" in g
+              and g["H"]["date"] == g["R"]["date"]
+          ]
+          completed.sort(key=lambda x: (x[1]["date"], x[0]))
+
+          last_played = {}
+          categories = defaultdict(list)
+          valid_games = 0
+
+          for gid, home, away in completed:
+              d = home["date"]
+
+              home_previous = last_played.get(home["team"])
+              away_previous = last_played.get(away["team"])
+
+              home_rest = (
+                  (d - home_previous).days - 1
+                  if home_previous else None
+              )
+              away_rest = (
+                  (d - away_previous).days - 1
+                  if away_previous else None
+              )
+
+              if home_rest is not None and away_rest is not None:
+                  valid_games += 1
+
+                  if home_rest == 0 and away_rest > 0:
+                      group = "Home back-to-back only"
+                  elif away_rest == 0 and home_rest > 0:
+                      group = "Away back-to-back only"
+                  elif home_rest == 0 and away_rest == 0:
+                      group = "Both back-to-back"
+                  elif home_rest > away_rest:
+                      group = "Home more rested"
+                  elif away_rest > home_rest:
+                      group = "Away more rested"
+                  else:
+                      group = "Equal rest"
+
+                  categories[group].append({
+                      "home_win": home["goals"] > away["goals"],
+                      "away_win": away["goals"] > home["goals"],
+                      "tied": home["goals"] == away["goals"],
+                      "total": home["goals"] + away["goals"],
+                      "home_goals": home["goals"],
+                      "away_goals": away["goals"],
+                  })
+
+              last_played[home["team"]] = d
+              last_played[away["team"]] = d
+
+          print("Season:", season)
+          print("Completed games:", len(completed))
+          print("Games with known rest:", valid_games)
+          print()
+
+          for group, rows in sorted(categories.items()):
+              n = len(rows)
+              home_wins = sum(r["home_win"] for r in rows)
+              away_wins = sum(r["away_win"] for r in rows)
+              ties = sum(r["tied"] for r in rows)
+              avg_total = sum(r["total"] for r in rows) / n
+              home_g = sum(r["home_goals"] for r in rows) / n
+              away_g = sum(r["away_goals"] for r in rows) / n
+
+              print("=" * 45)
+              print(group)
+              print("Games:", n)
+              print("Home scoring lead:", f"{home_wins/n:.1%}")
+              print("Away scoring lead:", f"{away_wins/n:.1%}")
+              print("Tied scores:", ties)
+              print("Average total goals:", round(avg_total, 3))
+              print("Home goals/game:", round(home_g, 3))
+              print("Away goals/game:", round(away_g, 3))
+
+          print("=" * 45)
+          print("REST AND FATIGUE ANALYSIS COMPLETE")
+          PY
