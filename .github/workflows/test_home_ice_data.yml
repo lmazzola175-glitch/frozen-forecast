@@ -1,0 +1,77 @@
+
+name: Test Frozen Forecast Home Ice Data
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-home-ice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Inspect NHL home and away data
+        run: |
+          python - <<'PY'
+          from engine import STATS, get_json, season_for
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+
+          today = datetime.now(
+              ZoneInfo("America/New_York")
+          ).strftime("%Y-%m-%d")
+
+          season = season_for(today)
+
+          response = get_json(
+              f"{STATS}/team/summary",
+              {
+                  "isAggregate": "false",
+                  "isGame": "true",
+                  "cayenneExp": (
+                      f"gameTypeId=2 and seasonId={season}"
+                  ),
+                  "limit": 10,
+              },
+          )
+
+          records = response.get("data", [])
+
+          print("Season:", season)
+          print("Total records:", response.get("total"))
+          print("Sample records:", len(records))
+
+          assert records, "No NHL team-game records returned"
+
+          for record in records[:3]:
+              print("--------------------------")
+              print("Team:", record.get("teamFullName"))
+              print("Date:", record.get("gameDate"))
+              print("Game ID:", record.get("gameId"))
+              print("Home/away-related fields:", {
+                  key: value
+                  for key, value in record.items()
+                  if any(
+                      word in key.lower()
+                      for word in ("home", "road", "away")
+                  )
+              })
+              print("Goals for:", record.get("goalsFor"))
+              print("Goals against:", record.get("goalsAgainst"))
+
+          print("HOME ICE DATA INSPECTION COMPLETE")
+          PY
