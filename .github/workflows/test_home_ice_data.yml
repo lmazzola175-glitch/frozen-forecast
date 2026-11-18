@@ -24,54 +24,102 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Inspect NHL home and away data
+      - name: Measure home-ice advantage
         run: |
           python - <<'PY'
-          from engine import STATS, get_json, season_for
+          from collections import defaultdict
           from datetime import datetime
           from zoneinfo import ZoneInfo
+          from engine import STATS, get_json, season_for
 
           today = datetime.now(
               ZoneInfo("America/New_York")
           ).strftime("%Y-%m-%d")
-
           season = season_for(today)
 
-          response = get_json(
-              f"{STATS}/team/summary",
-              {
-                  "isAggregate": "false",
-                  "isGame": "true",
-                  "cayenneExp": (
-                      f"gameTypeId=2 and seasonId={season}"
-                  ),
-                  "limit": 10,
-              },
+          records = []
+          start = 0
+
+          while True:
+              response = get_json(
+                  f"{STATS}/team/summary",
+                  {
+                      "isAggregate": "false",
+                      "isGame": "true",
+                      "cayenneExp": (
+                          f"gameTypeId=2 and seasonId={season}"
+                      ),
+                      "start": start,
+                      "limit": 100,
+                  },
+              )
+
+              batch = response.get("data", [])
+              if not batch:
+                  break
+
+              records.extend(batch)
+              start += len(batch)
+
+              if start >= int(response.get("total") or 0):
+                  break
+
+          games = defaultdict(dict)
+
+          for record in records:
+              date = str(record.get("gameDate") or "")[:10]
+              side = record.get("homeRoad")
+              game_id = str(record.get("gameId") or "")
+
+              if date >= today or side not in ("H", "R"):
+                  continue
+
+              if not game_id:
+                  continue
+
+              if record.get("goalsFor") is None:
+                  continue
+
+              games[game_id][side] = {
+                  "date": date,
+                  "goals": int(record["goalsFor"]),
+              }
+
+          matched = [
+              game for game in games.values()
+              if "H" in game and "R" in game
+          ]
+
+          assert matched, "No matched completed games"
+
+          home_goals = sum(
+              game["H"]["goals"] for game in matched
+          )
+          away_goals = sum(
+              game["R"]["goals"] for game in matched
           )
 
-          records = response.get("data", [])
+          count = len(matched)
+          home_avg = home_goals / count
+          away_avg = away_goals / count
+
+          home_wins = sum(
+              game["H"]["goals"] > game["R"]["goals"]
+              for game in matched
+          )
 
           print("Season:", season)
-          print("Total records:", response.get("total"))
-          print("Sample records:", len(records))
-
-          assert records, "No NHL team-game records returned"
-
-          for record in records[:3]:
-              print("--------------------------")
-              print("Team:", record.get("teamFullName"))
-              print("Date:", record.get("gameDate"))
-              print("Game ID:", record.get("gameId"))
-              print("Home/away-related fields:", {
-                  key: value
-                  for key, value in record.items()
-                  if any(
-                      word in key.lower()
-                      for word in ("home", "road", "away")
-                  )
-              })
-              print("Goals for:", record.get("goalsFor"))
-              print("Goals against:", record.get("goalsAgainst"))
-
-          print("HOME ICE DATA INSPECTION COMPLETE")
+          print("Matched games:", count)
+          print("Home goals/game:", round(home_avg, 3))
+          print("Away goals/game:", round(away_avg, 3))
+          print(
+              "Home scoring differential:",
+              round(home_avg - away_avg, 3)
+          )
+          print(
+              "Home regulation-scoring lead rate:",
+              f"{home_wins / count:.1%}"
+          )
+          print("HOME ICE ANALYSIS COMPLETE")
           PY
+
